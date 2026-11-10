@@ -8,6 +8,7 @@ import { registerInterruptions } from "./interruptions.ts";
 import { registerLogging } from "./logging.ts";
 import { registerProcedures } from "./procedures.ts";
 import { registerProposals } from "./proposals.ts";
+import { registerRunPlan } from "./runplan.ts";
 import { newState } from "./state.ts";
 import { registerSteps } from "./steps.ts";
 
@@ -36,6 +37,7 @@ function harness(pi: ExtensionAPI, options: HarnessOptions): void {
 	registerInterruptions(pi, state);
 	registerProcedures(pi, state, options.clock);
 	registerProposals(pi, state, steps);
+	registerRunPlan(pi, state, steps);
 
 	pi.registerTool({
 		name: "harness_ping",

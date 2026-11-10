@@ -5,6 +5,7 @@ import {
 	createAgentSession,
 	DefaultResourceLoader,
 	type ExtensionAPI,
+	type ExtensionUIContext,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -41,6 +42,11 @@ export interface SdkSessionOptions {
 	sessionDir?: string;
 	/** Settings on top of the defaults (compaction and retry off), such as compaction.keepRecentTokens. */
 	settings?: Record<string, unknown>;
+	/**
+	 * Bind a user interface whose select dialogs answer from this list, in order (running out
+	 * answers undefined, as Escape does). Without it the session has no UI (ctx.hasUI false).
+	 */
+	ui?: { select: (string | undefined)[] };
 	/** Longest time prompt() waits for pi to settle. Default 10 s. */
 	settleTimeoutMs?: number;
 }
@@ -54,6 +60,9 @@ export interface ToolResultSummary {
 export interface SdkSession {
 	session: AgentSession;
 	project: ToyProject;
+	/** With the ui option: each select dialog's title and options, and each notice, in order. */
+	dialogs: { title: string; options: string[] }[];
+	notices: string[];
 	/** Every session event, in order. */
 	events: AgentSessionEvent[];
 	/**
@@ -130,7 +139,23 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 		events.push(event);
 		if (event.type === "agent_start") observer.pending = Math.max(0, observer.pending - 1);
 	});
-	await session.bindExtensions({});
+	const dialogs: { title: string; options: string[] }[] = [];
+	const notices: string[] = [];
+	if (options.ui) {
+		const answers = [...options.ui.select];
+		// Only what the harness calls; pi spreads this object, so it must be a plain one.
+		const uiContext = {
+			select: async (title: string, choices: string[]) => (dialogs.push({ title, options: choices }), answers.shift()),
+			confirm: async () => false,
+			input: async () => undefined,
+			notify: (message: string) => void notices.push(message),
+			setStatus: () => {},
+			setWidget: () => {},
+		} as unknown as ExtensionUIContext;
+		await session.bindExtensions({ uiContext });
+	} else {
+		await session.bindExtensions({});
+	}
 
 	// pi picks a model before extension providers are in place and may fall back to a real one.
 	const model = session.modelRuntime.getModel(SCRIPTED_PROVIDER, SCRIPTED_MODEL_ID);
@@ -162,6 +187,8 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 	return {
 		session,
 		project,
+		dialogs,
+		notices,
 		events,
 		async prompt(text: string) {
 			await session.prompt(text);
