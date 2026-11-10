@@ -22,8 +22,9 @@ async function session(t: ToyProject, sessionId = "sess-1") {
 		await pi.runCommand(name!, rest.join(" "), { ...opts, ...extra });
 	};
 	const tool = (name: string, params: unknown, extra: ContextOptions = {}) => pi.callTool(name, params, { ...opts, ...extra });
+	// pi uses the first handler result that blocks (ExtensionRunner.emitToolCall).
 	const guard = async (toolName: string, path: string, cwd = t.dir) =>
-		(await pi.fire("tool_call", { type: "tool_call", toolCallId: "c1", toolName, input: { path, content: "x", edits: [] } }, { ...opts, cwd }))[0] as
+		(await pi.fire("tool_call", { type: "tool_call", toolCallId: "c1", toolName, input: { path, content: "x", edits: [] } }, { ...opts, cwd })).find((r) => r !== undefined) as
 			| { block: boolean; reason: string }
 			| undefined;
 	return { pi, run, tool, guard };

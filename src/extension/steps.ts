@@ -2,6 +2,7 @@
 // the active step when a session starts (Section 8).
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
+import { usageOf } from "../core/budget.ts";
 import { type Clock, systemClock } from "../core/clock.ts";
 import { CommandError, parseStepArgs, parseWordAndText } from "../core/commands.ts";
 import { ConfigError, type HarnessConfig, loadConfig } from "../core/config.ts";
@@ -26,7 +27,7 @@ import { activeStepLine, stepPrompt } from "../core/prompt.ts";
 import { changedProtected, currentCommit, GitError } from "../core/protect.ts";
 import { formatPlanStatus, planDifference } from "../core/status.ts";
 import { appendStepRecord } from "../core/steps.ts";
-import { type ActiveStep, type HarnessState, report, say } from "./state.ts";
+import { type ActiveStep, currentTracker, type HarnessState, report, say } from "./state.ts";
 
 const DECISIONS: ExitDecision[] = ["keep", "revert", "continue"];
 
@@ -120,7 +121,7 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		if (!step) return void (state.step = null);
 		const ref = { plan: plan.plan_id, step: step.id, attempt: step.attempt };
 		const same = state.step?.plan === ref.plan && state.step.step === ref.step && state.step.attempt === ref.attempt;
-		state.step = { ...ref, kind: step.kind, goal: step.goal, commit: commit ?? (same ? state.step!.commit : recordedCommit(ref)) };
+		state.step = { ...ref, kind: step.kind, goal: step.goal, budget: step.budget ?? {}, commit: commit ?? (same ? state.step!.commit : recordedCommit(ref)) };
 	};
 
 	const finish = (plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null) => {
@@ -223,8 +224,10 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		say(state, `Plan ${id} is active.`);
 	});
 
-	command("plan-status", "Show the active plan, its steps, open proposals, and the active step's budget", async (_args, ctx) => {
-		say(state, formatPlanStatus(await activePlan(ctx), config()));
+	command("plan-status", "Show the active plan, its steps, open proposals, and the active step's usage against its budget", async (_args, ctx) => {
+		const plan = await activePlan(ctx);
+		const tracker = currentTracker(state);
+		say(state, formatPlanStatus(plan, config(), tracker ? usageOf(tracker, clock.now()) : undefined));
 	});
 
 	command("plan-close", "Record the closing decision: /plan-close <keep|revert|continue> <note>", async (args, ctx) => {

@@ -32,6 +32,10 @@ export interface EventFields {
 	/** `commit` is the git commit when the step started, the base of the protected-file check. */
 	step_start: { kind: string; goal: string; origin: string; commit: string };
 	step_end: { outcome: "passed" | "blocked" | "abandoned" | "stopped"; detail: string | null };
+	/**
+	 * One assistant message, or a model call pi makes outside the agent loop: then `stop_reason` is
+	 * "compaction" or "branch_summary".
+	 */
 	model_call: {
 		model: string;
 		input: number;
@@ -58,7 +62,11 @@ export interface EventFields {
 		timed_out: boolean;
 		output_path: string;
 	};
-	/** `ok` is null when the check produced no result (outcome script_error or aborted). */
+	/**
+	 * `ok` is null when the check produced no result (outcome script_error or aborted). `tree` is a
+	 * fingerprint of the working tree (protect.ts treeFingerprint) taken at a failed check, for the
+	 * stall rule; null otherwise, or when git could not compute it.
+	 */
 	check: {
 		outcome: ScriptOutcomeKind;
 		ok: boolean | null;
@@ -66,6 +74,7 @@ export interface EventFields {
 		summary: string;
 		duration_ms: number;
 		by: "submit" | "runner";
+		tree: string | null;
 	};
 	/**
 	 * A label written by /why has `label_of` set to the number (1, 2, ...) of the interruption it
@@ -96,6 +105,11 @@ export interface EventLogOptions {
 	clock?: Clock;
 	/** Called with the first write failure only. */
 	onFirstError?: (error: Error) => void;
+	/**
+	 * Called with each record, whether or not it reached the file, so in-memory state that follows
+	 * the log (the budget tracker) keeps working when the disk fails. Its errors are ignored.
+	 */
+	onWrite?: (record: Record<string, unknown>) => void;
 }
 
 /** First `max` characters of a value's JSON form. */
@@ -114,6 +128,7 @@ export class EventLog {
 	private readonly context: () => LogContext;
 	private readonly clock: Clock;
 	private readonly onFirstError?: (error: Error) => void;
+	private readonly onWrite?: (record: Record<string, unknown>) => void;
 	private failed = false;
 
 	constructor(options: EventLogOptions) {
@@ -121,13 +136,15 @@ export class EventLog {
 		this.context = options.context;
 		this.clock = options.clock ?? systemClock;
 		this.onFirstError = options.onFirstError;
+		this.onWrite = options.onWrite;
 	}
 
 	/** Append one record. Never throws. */
 	write<T extends EventType>(type: T, fields: EventFields[T]): void {
+		let record: Record<string, unknown> | undefined;
 		try {
 			const { session, mode, step } = this.context();
-			const record = {
+			record = {
 				ts: new Date(this.clock.now()).toISOString(),
 				session,
 				mode,
@@ -146,6 +163,12 @@ export class EventLog {
 				this.onFirstError?.(e instanceof Error ? e : new Error(String(e)));
 			} catch {
 				// Reporting must not throw either.
+			}
+		} finally {
+			try {
+				if (record) this.onWrite?.(record);
+			} catch {
+				// Followers must not break logging.
 			}
 		}
 	}

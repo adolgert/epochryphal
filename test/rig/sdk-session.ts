@@ -39,6 +39,8 @@ export interface SdkSessionOptions {
 	factories?: ((pi: ExtensionAPI) => void)[];
 	/** Store the session in a file under this directory instead of in memory. */
 	sessionDir?: string;
+	/** Settings on top of the defaults (compaction and retry off), such as compaction.keepRecentTokens. */
+	settings?: Record<string, unknown>;
 	/** Longest time prompt() waits for pi to settle. Default 10 s. */
 	settleTimeoutMs?: number;
 }
@@ -98,7 +100,7 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 		});
 	};
 
-	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, ...options.settings });
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: project.dir,
 		agentDir,

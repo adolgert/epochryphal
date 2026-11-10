@@ -2,6 +2,7 @@
 // assembled only from that attempt's events in events.jsonl, so it can always be rebuilt from disk.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { agentMs, rebuildTracker } from "./budget.ts";
 import { type Mode, readEvents, type StepRef } from "./log.ts";
 import type { StepOutcome } from "./plan.ts";
 
@@ -19,7 +20,7 @@ export interface StepRecord {
 	origin: string;
 	mode: Mode;
 	outcome: StepOutcome;
-	/** The rule that stopped the step; null until stop rules exist (Step 9). */
+	/** The rule that stopped the step; null unless the outcome is stopped. */
 	stop_rule: string | null;
 	/** The reason given for blocked, abandoned, or stopped; null for passed. */
 	reason: string | null;
@@ -34,7 +35,6 @@ export interface StepRecord {
 	model_calls: number;
 }
 
-const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const round = (v: number, places: number) => Math.round(v * 10 ** places) / 10 ** places;
 
 /** The events of one step attempt, oldest first. */
@@ -63,12 +63,11 @@ export function interruptionsOf(events: readonly Event[]): { n: number; how: str
 /**
  * The step record of one attempt, or null when the log has no step_start and step_end for it.
  *
- * - check_attempts: check events with a result (a broken check script is not an attempt).
- * - script_failures: script events with ok false or a script error; aborted scripts do not count.
- *   Counts come from check, script, and model_call events, one per execution, so a call that
- *   another tool made (tool_call with a parent) is neither missed nor counted twice.
- * - wait_minutes: total duration of script events with is_wait true.
- * - agent_minutes: wall-clock time from step_start to step_end, minus wait_minutes.
+ * Tokens, cost, model calls, check attempts, script failures, and wait time are the budget
+ * tracker's (budget.ts), so the record and the stop rules count the same way. Counts come from
+ * check, script, and model_call events, one per execution, so a call that another tool made
+ * (tool_call with a parent) is neither missed nor counted twice. agent_minutes is wall-clock time
+ * from step_start to step_end, minus wait_minutes. stop_rule is the first rule_tripped with action stop.
  */
 export function stepRecord(events: readonly Event[], ref: StepRef): StepRecord | null {
 	const own = attemptEvents(events, ref);
@@ -81,10 +80,7 @@ export function stepRecord(events: readonly Event[], ref: StepRef): StepRecord |
 		const reason = i.reason ?? "unlabeled";
 		byReason[reason] = (byReason[reason] ?? 0) + 1;
 	}
-	const models = own.filter((e) => e.type === "model_call");
-	const scripts = own.filter((e) => e.type === "script");
-	const waitMs = scripts.filter((e) => e.is_wait === true).reduce((t, e) => t + num(e.duration_ms), 0);
-	const wallMs = Date.parse(String(end.ts)) - Date.parse(String(start.ts));
+	const t = rebuildTracker(own, ref);
 	const outcome = end.outcome as StepOutcome;
 	return {
 		ts: String(end.ts),
@@ -93,17 +89,17 @@ export function stepRecord(events: readonly Event[], ref: StepRef): StepRecord |
 		origin: String(start.origin),
 		mode: start.mode as Mode,
 		outcome,
-		stop_rule: null,
+		stop_rule: outcome === "stopped" ? (t.tripped.find((r) => r.action === "stop")?.rule ?? null) : null,
 		reason: outcome === "passed" || typeof end.detail !== "string" ? null : end.detail,
 		interruptions: interruptions.length,
 		interruptions_by_reason: byReason,
-		check_attempts: own.filter((e) => e.type === "check" && e.outcome === "result").length,
-		script_failures: scripts.filter((e) => e.ok === false || e.outcome === "script_error").length,
-		tokens: models.reduce((t, e) => t + num(e.total_tokens), 0),
-		cost_usd: round(models.reduce((t, e) => t + num(e.cost_usd), 0), 6),
-		agent_minutes: round(Math.max(0, num(wallMs) - waitMs) / 60_000, 2),
-		wait_minutes: round(waitMs / 60_000, 2),
-		model_calls: models.length,
+		check_attempts: t.check_attempts,
+		script_failures: t.script_failures,
+		tokens: t.tokens,
+		cost_usd: round(t.cost_usd, 6),
+		agent_minutes: round(agentMs(t, Date.parse(String(end.ts))) / 60_000, 2),
+		wait_minutes: round(t.wait_ms / 60_000, 2),
+		model_calls: t.model_calls,
 	};
 }
 

@@ -119,4 +119,30 @@ describe("runCheck", () => {
 		expect((await pending).status).toBe("aborted");
 		expect(checks(t)).toEqual([expect.objectContaining({ outcome: "aborted", ok: null })]);
 	});
+
+	it("stores a working-tree fingerprint in failed check events only, for the stall rule", async () => {
+		const { t, req } = setup({ check: [{ ok: false, summary: "f" }, { ok: false, summary: "f" }, { ok: false, summary: "f" }, { ok: true, summary: "p" }] });
+		await runCheck(req);
+		await runCheck(req); // Nothing changed in between; the harness's own log did.
+		writeFileSync(join(t.dir, "src/solver.txt"), "changed\n");
+		await runCheck(req);
+		await runCheck(req);
+		const trees = checks(t).map((e) => e.tree);
+		expect(trees[0]).toMatch(/^[0-9a-f]{64}$/);
+		expect(trees[1]).toBe(trees[0]);
+		expect(trees[2]).toMatch(/^[0-9a-f]{64}$/);
+		expect(trees[2]).not.toBe(trees[0]);
+		expect(trees[3]).toBeNull();
+	});
+
+	it("stores a fingerprint for protected_changed, and null for a script error", async () => {
+		const { t, req } = setup({ check: [{ mode: "exit", code: 3 }] });
+		await runCheck(req);
+		writeFileSync(join(t.dir, "tests/test_solver.txt"), "expect nothing\n");
+		await runCheck(req);
+		expect(checks(t).map((e) => [e.outcome, typeof e.tree])).toEqual([
+			["script_error", "object"],
+			["result", "string"],
+		]);
+	});
 });

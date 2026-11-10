@@ -1,10 +1,10 @@
 // Binds pi events to the event log (plan Section 7.5).
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { CompactionEntry, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import type { Clock } from "../core/clock.ts";
 import { EventLog, summarize } from "../core/log.ts";
 import { findProjectRoot } from "../core/project.ts";
-import { type HarnessState, report } from "./state.ts";
+import { followLog, type HarnessState, report } from "./state.ts";
 
 export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: Clock): void {
 	/** Arguments of tool calls that have started but not ended, by tool call id. */
@@ -25,6 +25,7 @@ export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: C
 			clock,
 			context: () => ({ session: state.session, mode: state.mode, step: state.step }),
 			onFirstError: (e) => report(state, `cannot write the event log ${path}: ${e.message}. Work continues without it.`),
+			onWrite: (record) => followLog(state, record),
 		});
 		state.log.write("session_start", { reason: event.reason });
 	});
@@ -74,4 +75,26 @@ export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: C
 			stop_reason: message.stopReason,
 		});
 	});
+
+	// Compaction and branch summaries call the model outside the agent loop, with no message_end
+	// (docs/pi-facts.md, Step 9). Their usage is logged as model calls, so budgets count it; the
+	// stop rules act at the next model call (budget.ts). The model is the session's; a compaction
+	// model set in pi's settings is not seen here.
+	const logHidden = (usage: CompactionEntry["usage"], kind: string, ctx: ExtensionContext) => {
+		if (!usage) return;
+		state.ctx = ctx;
+		const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown";
+		state.log?.write("model_call", {
+			model,
+			input: usage.input,
+			output: usage.output,
+			cache_read: usage.cacheRead,
+			cache_write: usage.cacheWrite,
+			total_tokens: usage.totalTokens,
+			cost_usd: usage.cost.total,
+			stop_reason: kind,
+		});
+	};
+	pi.on("session_compact", async (event, ctx) => logHidden(event.compactionEntry.usage, "compaction", ctx));
+	pi.on("session_tree", async (event, ctx) => logHidden(event.summaryEntry?.usage, "branch_summary", ctx));
 }

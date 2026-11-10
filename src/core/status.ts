@@ -1,14 +1,16 @@
 // The text of /plan-status and /proposals.
+import type { Usage } from "./budget.ts";
 import type { Budget, HarnessConfig } from "./config.ts";
 import type { Plan, Step } from "./plan.ts";
 
 /** The budget for a step: its kind's budget with the step's own fields on top. */
-export function stepBudget(config: HarnessConfig, step: Step): Budget | undefined {
+export function stepBudget(config: HarnessConfig, step: Pick<Step, "kind" | "budget">): Budget | undefined {
 	const base = config.kinds[step.kind]?.budget;
 	return base ? { ...base, ...step.budget } : undefined;
 }
 
-export function formatPlanStatus(plan: Plan, config: HarnessConfig): string {
+/** `usage` is the active step's usage so far, when known. */
+export function formatPlanStatus(plan: Plan, config: HarnessConfig, usage?: Usage): string {
 	const lines = [`Plan ${plan.plan_id}: ${plan.goal}`];
 	if (plan.exit) lines.push(`Closed: ${plan.exit.decision} (${plan.exit.at}): ${plan.exit.note}`);
 	if (plan.steps.length === 0) lines.push("No steps yet. Add one with /step or /add-step.");
@@ -25,7 +27,13 @@ export function formatPlanStatus(plan: Plan, config: HarnessConfig): string {
 	}
 	const active = plan.steps.find((s) => s.status === "active");
 	const budget = active && stepBudget(config, active);
-	if (active && budget) {
+	if (active && budget && usage) {
+		const cost = Math.round(usage.cost_usd * 10_000) / 10_000;
+		const minutes = Math.round(usage.agent_minutes * 10) / 10;
+		lines.push(
+			`Usage of ${active.id}: ${usage.tokens} of ${budget.tokens} tokens, $${cost} of $${budget.cost_usd}, ${minutes} of ${budget.agent_minutes} agent minutes, ${usage.check_attempts} of ${budget.check_attempts} check attempts`,
+		);
+	} else if (active && budget) {
 		lines.push(
 			`Budget for ${active.id}: ${budget.tokens} tokens, $${budget.cost_usd}, ${budget.agent_minutes} agent minutes, ${budget.check_attempts} check attempts`,
 		);

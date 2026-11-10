@@ -5,7 +5,7 @@ import type { Clock } from "./clock.ts";
 import type { HarnessConfig } from "./config.ts";
 import type { EventLog } from "./log.ts";
 import type { Step } from "./plan.ts";
-import { changedProtected } from "./protect.ts";
+import { changedProtected, treeFingerprint } from "./protect.ts";
 import { runScript } from "./script.ts";
 
 export interface CheckRequest {
@@ -39,7 +39,15 @@ export async function runCheck(req: CheckRequest): Promise<CheckResult> {
 	const now = () => req.clock?.now() ?? Date.now();
 	const start = now();
 	const logCheck = (fields: { outcome: "result" | "script_error" | "aborted"; ok: boolean | null; signature: string | null; summary: string }) =>
-		req.log?.write("check", { duration_ms: now() - start, by: req.by, ...fields });
+		req.log?.write("check", { duration_ms: now() - start, by: req.by, ...fields, tree: fields.ok === false ? fingerprint() : null });
+	// For the stall rule; a failure to compute it only means the tree half of that rule cannot trip.
+	const fingerprint = (): string | null => {
+		try {
+			return treeFingerprint(req.root, req.baseCommit!, req.harnessDir);
+		} catch {
+			return null;
+		}
+	};
 	const error = (problem: string): CheckResult => {
 		logCheck({ outcome: "script_error", ok: null, signature: null, summary: problem });
 		return { status: "error", text: brokenText(problem) };

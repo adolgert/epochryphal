@@ -51,7 +51,7 @@ describe("plan commands", () => {
 		expect(errors(pi)).toEqual([expect.stringMatching(/harness: no plan e9/)]);
 	});
 
-	it("/plan-status shows the goal, each step, and the active step's budget", async () => {
+	it("/plan-status shows the goal, each step, and the active step's usage against its budget", async () => {
 		toy = makeToyProject();
 		const { pi, run } = await session(toy);
 		await run("/plan-new e1 Run the solve on the GPU");
@@ -66,7 +66,7 @@ describe("plan commands", () => {
 					"Plan e1: Run the solve on the GPU",
 					"  s1 pending   offload [R17]: Port R17",
 					"  s2 active    measure: Profile it",
-					"Budget for s2: 1000000 tokens, $10, 60 agent minutes, 5 check attempts",
+					"Usage of s2: 0 of 1000000 tokens, $0 of $10, 0 of 60 agent minutes, 0 of 5 check attempts",
 				].join("\n"),
 			},
 		]);

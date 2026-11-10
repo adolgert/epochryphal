@@ -1,7 +1,9 @@
 // Protected files (plan Section 7.4): glob matching, the guard's decision, and the two questions
 // asked of git. The harness detects changes to protected files; it does not prevent them.
 import { execFileSync } from "node:child_process";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Git is missing, the project is not a repository, or a git command failed. */
 export class GitError extends Error {
@@ -48,7 +50,7 @@ export function guardReason(path: string, patterns: readonly string[], harnessDi
 
 function git(root: string, args: string[]): string {
 	try {
-		return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
 	} catch (e) {
 		const err = e as NodeJS.ErrnoException & { stderr?: string };
 		if (err.code === "ENOENT") throw new GitError("git is not installed or not on the PATH");
@@ -76,4 +78,38 @@ export function changedProtected(root: string, base: string, patterns: readonly 
 	const changed = nulList(git(root, ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--relative", "-z", base, "--"]));
 	const untracked = nulList(git(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
 	return [...new Set([...changed, ...untracked])].filter((p) => matchesAny(p, patterns)).sort();
+}
+
+/**
+ * A hash of the working tree's content under `root`, for the stall rule: equal hashes mean the
+ * same files hold the same bytes. It covers every file that differs from commit `base` (committed
+ * since or not, with its mode, or as deleted) and every untracked file that git does not ignore.
+ * The harness's own plans/ and log/ are left out, because the harness writes there itself.
+ *
+ * Cost: one `git diff` and one `git ls-files`, which stat every tracked file and walk untracked
+ * directories, then reading each changed or untracked file in full. Nothing is written to git.
+ */
+export function treeFingerprint(root: string, base: string, harnessDir: string): string {
+	const pathspec = ["--", ".", `:(exclude)${harnessDir}/plans`, `:(exclude)${harnessDir}/log`];
+	// --raw -z gives ":oldmode newmode oldsha newsha status\0path\0" per file.
+	const raw = nulList(git(root, ["diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--relative", base, ...pathspec]));
+	const entries: string[] = [];
+	for (let i = 0; i + 1 < raw.length; i += 2) {
+		const [, newMode = "", , , status = ""] = raw[i]!.split(" ");
+		entries.push(`${raw[i + 1]}\0${newMode}\0${status === "D" ? "deleted" : contentHash(join(root, raw[i + 1]!))}`);
+	}
+	for (const path of nulList(git(root, ["ls-files", "--others", "--exclude-standard", "-z", ...pathspec]))) {
+		entries.push(`${path}\0untracked\0${contentHash(join(root, path))}`);
+	}
+	return createHash("sha256").update(entries.sort().join("\n")).digest("hex");
+}
+
+/** sha256 of a file's bytes, of a symbolic link's target, or "missing". */
+function contentHash(path: string): string {
+	try {
+		const target = lstatSync(path).isSymbolicLink() ? readlinkSync(path) : readFileSync(path);
+		return createHash("sha256").update(target).digest("hex");
+	} catch {
+		return "missing";
+	}
 }

@@ -8,6 +8,7 @@ import { CommandError } from "../core/commands.ts";
 import { loadConfig } from "../core/config.ts";
 import { activeStep, type Plan, type Step } from "../core/plan.ts";
 import { guardReason, projectPath } from "../core/protect.ts";
+import type { BudgetApi } from "./budget.ts";
 import type { HarnessState } from "./state.ts";
 import { isRefusal, type StepsApi } from "./steps.ts";
 
@@ -17,7 +18,7 @@ export const reply = (text: string, extra: { isError?: boolean; terminate?: bool
 	...extra,
 });
 
-export function registerCompletion(pi: ExtensionAPI, state: HarnessState, steps: StepsApi, clock?: Clock): void {
+export function registerCompletion(pi: ExtensionAPI, state: HarnessState, steps: StepsApi, budget: BudgetApi, clock?: Clock): void {
 	/** The plan and its active step. Throws a refusal when there is none. */
 	const active = async (ctx: ExtensionContext, tool: string): Promise<{ plan: Plan; step: Step }> => {
 		const plan = await steps.activePlan(ctx);
@@ -59,6 +60,11 @@ export function registerCompletion(pi: ExtensionAPI, state: HarnessState, steps:
 					signal,
 					clock,
 				});
+				if (result.status === "failed") {
+					// Section 7.3 item 6: after a failed check, the rules on check attempts and stalls.
+					const stopped = await budget.enforce(ctx);
+					if (stopped) return reply(`${result.text}\n\n${stopped}`, { isError: true, terminate: true });
+				}
 				if (result.status !== "passed") return reply(result.text, { isError: true });
 				// Read again: the person may have ended the step while the check ran.
 				const now = await active(ctx, "submit");

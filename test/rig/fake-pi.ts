@@ -162,6 +162,7 @@ export class FakePi {
 			hasUI,
 			mode: options.mode ?? (hasUI ? "tui" : "print"),
 			cwd: options.cwd ?? process.cwd(),
+			model: undefined,
 			signal: undefined,
 			sessionManager: strict("ctx.sessionManager", {
 				getSessionId: () => options.sessionId ?? "fake-session",
