@@ -115,6 +115,7 @@ export class FakePi {
 	/** A stub context. Its UI answers dialogs from `options.ui` and records notifications. */
 	context(options: ContextOptions = {}): ExtensionCommandContext {
 		const hasUI = options.hasUI ?? true;
+		let idle = options.idle ?? true;
 		const answers = { select: [...(options.ui?.select ?? [])], confirm: [...(options.ui?.confirm ?? [])], input: [...(options.ui?.input ?? [])] };
 		const take = <K extends keyof typeof answers>(kind: K, title: string, message?: unknown): (typeof answers)[K][number] => {
 			this.dialogs.push({ kind, title, message });
@@ -141,13 +142,14 @@ export class FakePi {
 				getSessionId: () => options.sessionId ?? "fake-session",
 				getSessionFile: () => undefined,
 			}),
-			isIdle: () => options.idle ?? true,
+			isIdle: () => idle,
 			hasPendingMessages: () => false,
 			abort: () => {
 				this.agentCalls.push("abort");
 			},
 			waitForIdle: async () => {
 				this.agentCalls.push("waitForIdle");
+				idle = true; // As in pi: once waitForIdle returns, the agent is idle.
 			},
 		});
 	}

@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Clock } from "../core/clock.ts";
 import { registerCompletion } from "./completion.ts";
+import { registerInterruptions } from "./interruptions.ts";
 import { registerLogging } from "./logging.ts";
 import { newState } from "./state.ts";
 import { registerSteps } from "./steps.ts";
@@ -27,6 +28,7 @@ function harness(pi: ExtensionAPI, options: HarnessOptions): void {
 	registerLogging(pi, state, options.clock);
 	const steps = registerSteps(pi, state, options.clock);
 	registerCompletion(pi, state, steps, options.clock);
+	registerInterruptions(pi, state);
 
 	pi.registerTool({
 		name: "harness_ping",

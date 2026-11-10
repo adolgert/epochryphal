@@ -57,6 +57,28 @@ describe("logging adapter", () => {
 		expect(String(calls[0]!.args_summary).startsWith('{"path":"a.txt","content":"yyy')).toBe(true);
 	});
 
+	it("records the parent of a call that another tool made, and null for a call the model made", async () => {
+		toy = makeToyProject();
+		const pi = await started(toy);
+		await pi.fire("tool_execution_start", { type: "tool_execution_start", toolCallId: "c1", toolName: "code", args: {} });
+		await pi.fire("tool_execution_start", { type: "tool_execution_start", toolCallId: "c1/1", toolName: "read", args: {}, parentToolCallId: "c1" });
+		await pi.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "c1/1", toolName: "read", result: {}, isError: false, durationMs: 1, parentToolCallId: "c1" });
+		await pi.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "c1", toolName: "code", result: {}, isError: false, durationMs: 2 });
+		expect(toy.readEvents().filter((e) => e.type === "tool_call").map((e) => [e.tool, e.parent])).toEqual([
+			["read", "c1"],
+			["code", null],
+		]);
+	});
+
+	it("forgets started calls when the run settles", async () => {
+		toy = makeToyProject();
+		const pi = await started(toy);
+		await pi.fire("tool_execution_start", { type: "tool_execution_start", toolCallId: "c1", toolName: "read", args: { path: "a" } });
+		await pi.fire("agent_settled", { type: "agent_settled", aborted: true });
+		await pi.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "c1", toolName: "read", result: {}, isError: true });
+		expect(toy.readEvents().find((e) => e.type === "tool_call")).toMatchObject({ args_summary: "{}" });
+	});
+
 	it("records a call that did not run (no durationMs) with duration_ms null", async () => {
 		toy = makeToyProject();
 		const pi = await started(toy);

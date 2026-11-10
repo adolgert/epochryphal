@@ -24,7 +24,7 @@ describe("EventLog", () => {
 		const context: LogContext = { session: "sess-1", mode: "run_plan", step: { plan: "e1", step: "s2", attempt: 3 } };
 		const log = new EventLog({ path, context: () => context, clock: new FakeClock("2026-11-10T14:05:09.120Z") });
 		log.write("session_start", { reason: "startup" });
-		log.write("tool_call", { tool: "build", args_summary: "{}", duration_ms: 5, is_error: false });
+		log.write("tool_call", { tool: "build", args_summary: "{}", duration_ms: 5, is_error: false, parent: null });
 		const records = read(path);
 		expect(records).toHaveLength(2);
 		expect(records[0]).toEqual({

@@ -9,6 +9,8 @@ export type ScriptOutcomeKind = ScriptOutcome["kind"];
 
 export type Mode = "supervised" | "run_plan" | "headless";
 
+export type InterruptionHow = "steer" | "follow_up" | "idle_message" | "abort" | "control";
+
 /** The step attempt an event belongs to. */
 export interface StepRef {
 	plan: string;
@@ -40,10 +42,15 @@ export interface EventFields {
 		cost_usd: number;
 		stop_reason: string;
 	};
-	tool_call: { tool: string; args_summary: string; duration_ms: number | null; is_error: boolean };
-	/** `ok` is null when the script produced no result (outcome script_error or aborted). */
+	/** `parent` is the id of the tool call that made this call, null for a call the model made. */
+	tool_call: { tool: string; args_summary: string; duration_ms: number | null; is_error: boolean; parent: string | null };
+	/**
+	 * `ok` is null when the script produced no result (outcome script_error or aborted).
+	 * `is_wait` marks a procedure whose time is waiting; it counts as wait_minutes, not agent_minutes.
+	 */
 	script: {
 		name: string;
+		is_wait: boolean;
 		outcome: ScriptOutcomeKind;
 		ok: boolean | null;
 		signature: string | null;
@@ -60,11 +67,16 @@ export interface EventFields {
 		duration_ms: number;
 		by: "submit" | "runner";
 	};
+	/**
+	 * A label written by /why has `label_of` set to the number (1, 2, ...) of the interruption it
+	 * labels, counted within the step attempt. An interruption itself has `label_of` null.
+	 */
 	interruption: {
-		how: "steer" | "follow_up" | "idle_message" | "abort" | "control";
+		how: InterruptionHow;
 		text_head: string | null;
 		reason: string | null;
 		note: string | null;
+		label_of: number | null;
 	};
 	guard_block: { tool: string; path: string };
 	protected_changed: { paths: string[] };

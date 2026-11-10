@@ -25,12 +25,19 @@ export interface HarnessState {
 	log: EventLog | null;
 	/** Plan files; null while the harness is inactive. */
 	store: PlanStore | null;
+	/**
+	 * A step prompt sent with sendUserMessage whose run has not begun. pi starts that run a moment
+	 * later, so a command can end the step first (docs/pi-facts.md, Step 6).
+	 */
+	starting: (StepRef & { prompt: string }) | null;
+	/** The harness itself aborted the run (for /abandon); that abort is not an interruption. */
+	ownAbort: boolean;
 	/** The most recent context, for reporting problems to the person. */
 	ctx: ExtensionContext | null;
 }
 
 export function newState(): HarnessState {
-	return { harnessDir: "harness", root: null, session: null, mode: "supervised", step: null, log: null, store: null, ctx: null };
+	return { harnessDir: "harness", root: null, session: null, mode: "supervised", step: null, log: null, store: null, starting: null, ownAbort: false, ctx: null };
 }
 
 function tell(state: HarnessState, message: string, level: "info" | "warning" | "error"): void {

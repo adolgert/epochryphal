@@ -1,0 +1,57 @@
+{
+  "plan_id": "e2",
+  "goal": "Second epoch",
+  "created_at": "2026-11-10T08:00:00.000Z",
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "measure",
+      "goal": "goal 1",
+      "check_args": [],
+      "origin": "user",
+      "status": "abandoned",
+      "attempt": 1,
+      "reason": "wrong approach"
+    },
+    {
+      "id": "s2",
+      "kind": "offload",
+      "goal": "goal 2",
+      "check_args": [],
+      "origin": "user",
+      "status": "blocked",
+      "attempt": 1,
+      "reason": "no GPU node"
+    },
+    {
+      "id": "s3",
+      "kind": "offload",
+      "goal": "goal 3",
+      "check_args": [],
+      "origin": "user",
+      "status": "stopped",
+      "attempt": 1,
+      "reason": "same failure twice"
+    },
+    {
+      "id": "s4",
+      "kind": "measure",
+      "goal": "goal 4",
+      "check_args": [],
+      "origin": "user",
+      "status": "passed",
+      "attempt": 1
+    },
+    {
+      "id": "s5",
+      "kind": "offload",
+      "goal": "goal 5",
+      "check_args": [],
+      "origin": "user",
+      "status": "passed",
+      "attempt": 1
+    }
+  ],
+  "proposals": [],
+  "exit": null
+}

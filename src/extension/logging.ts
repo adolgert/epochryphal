@@ -48,7 +48,14 @@ export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: C
 			// Absent when the tool did not run, for example when a guard blocked it.
 			duration_ms: event.durationMs ?? null,
 			is_error: event.isError,
+			parent: event.parentToolCallId ?? null,
 		});
+	});
+
+	// Every started call ends before the run settles, even when aborted (docs/pi-facts.md, Step 6).
+	// Clearing here keeps a call that somehow never ended from staying in memory.
+	pi.on("agent_settled", async () => {
+		pending.clear();
 	});
 
 	pi.on("message_end", async (event, ctx) => {

@@ -35,6 +35,8 @@ export interface SdkSessionOptions {
 	extensions?: string[];
 	/** Load the harness extension in-process with these options (for example a fake clock) instead of by path. */
 	harness?: HarnessOptions;
+	/** More extensions to load in-process, such as a test tool. */
+	factories?: ((pi: ExtensionAPI) => void)[];
 	/** Store the session in a file under this directory instead of in memory. */
 	sessionDir?: string;
 	/** Longest time prompt() waits for pi to settle. Default 10 s. */
@@ -57,6 +59,8 @@ export interface SdkSession {
 	 * command started with sendUserMessage. Throws if the script ran out.
 	 */
 	prompt(text: string): Promise<void>;
+	/** Wait until pi has settled, including runs that were asked for but have not started. */
+	settle(): Promise<void>;
 	requests(): ModelRequest[];
 	assistantMessages(): AssistantMessage[];
 	toolResults(): ToolResultSummary[];
@@ -105,7 +109,7 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 		noContextFiles: true,
 		noThemes: true,
 		additionalExtensionPaths: [...(options.extensions ?? (options.harness ? [] : [EXTENSION_PATH])), SCRIPTED_MODEL_PATH],
-		extensionFactories: [observe, ...(options.harness ? [createHarnessExtension(options.harness)] : [])],
+		extensionFactories: [observe, ...(options.harness ? [createHarnessExtension(options.harness)] : []), ...(options.factories ?? [])],
 	});
 	await resourceLoader.reload();
 	const sessionManager = options.sessionDir
@@ -165,6 +169,7 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 				throw new Error(`${SCRIPT_EXHAUSTED}: the model was asked for more responses than the script has (${options.script.length})`);
 			}
 		},
+		settle,
 		requests: () => readRequests(requestsPath),
 		assistantMessages,
 		toolResults: () =>

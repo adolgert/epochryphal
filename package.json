@@ -9,6 +9,9 @@
       "./src/extension/index.ts"
     ]
   },
+  "bin": {
+    "harness-report": "./src/bin/harness-report.ts"
+  },
   "engines": {
     "node": ">=22.18"
   },

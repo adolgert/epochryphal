@@ -1,7 +1,7 @@
 // The person's plan and step commands (plan Section 7.1), the step prompt (7.2), and restoring
 // the active step when a session starts (Section 8).
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Clock, systemClock } from "../core/clock.ts";
 import { CommandError, parseStepArgs, parseWordAndText } from "../core/commands.ts";
 import { ConfigError, type HarnessConfig, loadConfig } from "../core/config.ts";
@@ -25,6 +25,7 @@ import { readEvents, type StepRef } from "../core/log.ts";
 import { activeStepLine, stepPrompt } from "../core/prompt.ts";
 import { changedProtected, currentCommit, GitError } from "../core/protect.ts";
 import { formatPlanStatus, planDifference } from "../core/status.ts";
+import { appendStepRecord } from "../core/steps.ts";
 import { type ActiveStep, type HarnessState, report, say } from "./state.ts";
 
 const DECISIONS: ExitDecision[] = ["keep", "revert", "continue"];
@@ -40,6 +41,24 @@ export interface StepsApi {
 	activePlan(ctx: ExtensionContext): Promise<Plan>;
 	/** End the active step: write the plan, log step_end, and clear the active step. */
 	finish(plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null): void;
+}
+
+type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
+
+/** Register a command whose expected failures are reported to the person instead of thrown. */
+export function registerHarnessCommand(pi: ExtensionAPI, state: HarnessState, name: string, description: string, handler: CommandHandler): void {
+	pi.registerCommand(name, {
+		description,
+		handler: async (args, ctx) => {
+			state.ctx = ctx;
+			try {
+				await handler(args, ctx);
+			} catch (e) {
+				if (isRefusal(e)) report(state, e.message);
+				else throw e;
+			}
+		},
+	});
 }
 
 export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Clock = systemClock): StepsApi {
@@ -98,9 +117,18 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 	};
 
 	const finish = (plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null) => {
+		const attempt = plan.steps.find((s) => s.id === stepId)?.attempt;
 		store().write(endStep(plan, stepId, outcome, detail ?? undefined));
 		state.log?.write("step_end", { outcome, detail });
 		syncActive(null);
+		if (attempt === undefined || !state.log) return;
+		// The record is built from the event log, so it also covers work done before a restart.
+		const stepsPath = join(dirname(state.log.path), "steps.jsonl");
+		try {
+			appendStepRecord(state.log.path, stepsPath, { plan: plan.plan_id, step: stepId, attempt });
+		} catch (e) {
+			report(state, `cannot write the step record to ${stepsPath}: ${(e as Error).message}. The step still ended as ${outcome}; its events are in ${state.log.path}.`);
+		}
 	};
 
 	const requireIdle = (ctx: ExtensionCommandContext) => {
@@ -125,28 +153,16 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		store().write(plan);
 		syncActive(plan, commit);
 		state.log?.write("step_start", { kind: step.kind, goal: step.goal, origin: step.origin, commit });
+		state.starting = { plan: plan.plan_id, step: step.id, attempt: step.attempt, prompt };
 		pi.sendUserMessage(prompt);
 	};
 
-	/** Register a command whose expected failures are reported to the person instead of thrown. */
-	const command = (name: string, description: string, handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void) => {
-		pi.registerCommand(name, {
-			description,
-			handler: async (args, ctx) => {
-				state.ctx = ctx;
-				try {
-					await handler(args, ctx);
-				} catch (e) {
-					if (isRefusal(e)) report(state, e.message);
-					else throw e;
-				}
-			},
-		});
-	};
+	const command = (name: string, description: string, handler: CommandHandler) => registerHarnessCommand(pi, state, name, description, handler);
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.ctx = ctx;
 		state.step = null;
+		state.starting = null;
 		state.store = state.root ? new PlanStore(state.root, state.harnessDir) : null;
 		if (!state.store) return;
 		try {
@@ -161,7 +177,17 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		}
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
+		const starting = state.starting;
+		if (starting && event.messageType === "user" && event.prompt === starting.prompt) {
+			state.starting = null;
+			// The step ended (by /abandon) after its prompt was sent but before its run began.
+			if (state.step?.step !== starting.step || state.step.plan !== starting.plan || state.step.attempt !== starting.attempt) {
+				state.ownAbort = true;
+				ctx.abort();
+				return;
+			}
+		}
 		const sections = event.systemPromptOptions.sections;
 		if (state.step) sections.harness = activeStepLine({ id: state.step.step, goal: state.step.goal });
 		else delete sections.harness;
@@ -234,15 +260,21 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		const reason = args.trim();
 		if (reason === "") throw new CommandError("usage: /abandon <reason>");
 		if (!state.step) throw new CommandError("no step is active");
-		if (!ctx.isIdle()) {
+		const stopRun = async () => {
+			if (ctx.isIdle()) return;
+			state.ownAbort = true; // The outcome "abandoned" records this; it is not an interruption.
 			ctx.abort();
 			await ctx.waitForIdle();
-		}
+		};
+		await stopRun();
 		// Read after the agent has stopped: the step may have ended meanwhile.
 		const plan = await activePlan(ctx);
 		const step = activeStep(plan);
 		if (!step) throw new CommandError("no step is active");
 		finish(plan, step.id, "abandoned", reason);
+		// The step's own run may have begun meanwhile, if /step was sent just before. Stop it too;
+		// if it has not begun, before_agent_start stops it.
+		await stopRun();
 		say(state, `Step ${step.id} abandoned: ${reason}`);
 	});
 

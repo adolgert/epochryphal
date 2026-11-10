@@ -1,0 +1,4 @@
+kind,attempts,passed,blocked,abandoned,stopped,completion_rate,unaided_rate,median_tokens,median_cost_usd,median_agent_minutes,median_check_attempts
+measure,4,3,0,1,0,0.75,0.5,250000,2.5,25,1
+offload,5,2,1,0,2,0.4,0.2,800000,9.41,38.2,3
+restructure,3,1,1,0,1,0.3333,0,600000,7.25,50.5,2
