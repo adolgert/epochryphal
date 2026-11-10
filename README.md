@@ -2,7 +2,6 @@
 
 A pi extension for supervised and unattended code-porting work. The agent finishes a step only when a check script passes. Every tool call, model call, typed message, and check result goes into a log, and a report computes completion rates and interruption counts from that log. The same code runs one supervised step, a sequence of steps with approval between them (`/run-plan`), and an unattended run (`harness-run`).
 
-The design is in `pi-port-harness-plan.md`. Where this README and the plan differ, this README describes the code. `docs/pi-facts.md` records what was verified about pi 1.5.1.
 
 Contents: [Installation](#installation) · [Walkthrough](#walkthrough) · [Files in the project](#files-in-the-project) · [Configuration](#configuration-harnessharnessjson) · [Script contract](#script-contract) · [Commands](#commands-for-the-person) · [Agent tools](#tools-for-the-agent) · [Stop rules](#budgets-and-stop-rules) · [Headless runs](#headless-runs) · [Lessons](#lessons) · [Logs](#logs) · [Report](#report) · [AGENTS.md snippet](#agentsmd-snippet) · [Tests](#tests) · [Limits](#limits)
 
@@ -12,6 +11,8 @@ Requirements: Node 22.18 or later (the bins are TypeScript files that Node runs 
 
 The package is installed from a checkout of this repository. It is not published to npm, and installing it from an npm tarball does not work for the bins (see [Limits](#limits)).
 
+Steps 1 and 2 are required. Step 3 is optional: it only puts the command-line programs on your `PATH`. Steps 2 and 3 are independent; one registers the checkout with pi, the other with npm.
+
 1. Get a checkout of this repository, then install its development dependencies, which include the pinned pi SDK that `harness-run` uses:
 
    ```sh
@@ -19,7 +20,7 @@ The package is installed from a checkout of this repository. It is not published
    npm install
    ```
 
-2. Make pi load the extension. Either install the checkout as a pi package, which writes it to `~/.pi/agent/settings.json` and loads it in every pi session:
+2. Make pi load the extension, which provides the commands such as `/step` and `/run-plan`. The source must be the path of the checkout; a bare package name does not work because the package is not on npm. Either install the checkout as a pi package, which writes it to `~/.pi/agent/settings.json` and loads it in every pi session:
 
    ```sh
    pi install /path/to/epochryphal
@@ -34,7 +35,7 @@ The package is installed from a checkout of this repository. It is not published
 
    pi reads the extension's entry point from the `pi.extensions` field of `package.json` (`./src/extension/index.ts`) and loads it with its own TypeScript loader. pi loads a local package from its path without copying it, so edits in the checkout take effect at the next session. pi's documentation also describes `pi install -l` (project settings in `.pi/settings.json`), which loads only after project trust is granted; that variant was not verified here.
 
-3. Put the three command-line programs on your `PATH` by installing the checkout globally with npm. For a local directory npm creates symbolic links to the checkout, so Node runs the files in the checkout:
+3. Optional: put the three command-line programs (`harness-run`, `harness-ctl`, `harness-report`) on your `PATH` by installing the checkout globally with npm. For a local directory npm creates symbolic links to the checkout, so Node runs the files in the checkout:
 
    ```sh
    npm install -g /path/to/epochryphal
@@ -44,6 +45,18 @@ The package is installed from a checkout of this repository. It is not published
    This was verified with `npm install -g --prefix <temporary directory> <checkout>` (test/cli/install.test.ts does the same). Without step 3 you can run the bins directly, for example `node /path/to/epochryphal/src/bin/harness-report.ts --project .`.
 
 The extension is active in a pi session only when `harness/harness.json` exists in pi's working directory or a directory above it. Otherwise it writes one warning and does nothing.
+
+### Uninstalling
+
+Undo each installation separately. `pi remove` takes the same source that `pi install` was given (`pi list` shows it); `pi uninstall` is an alias. The npm command is needed only if you did step 3.
+
+```sh
+pi remove /path/to/epochryphal
+npm uninstall -g epochryphal
+```
+
+These two commands are taken from `pi --help` and npm's documentation; they were not run here. Neither touches the checkout or any project's `harness/` directory.
+
 
 ## Walkthrough
 
