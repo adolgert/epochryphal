@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import type { Clock } from "../core/clock.ts";
 import { registerLogging } from "./logging.ts";
 import { newState } from "./state.ts";
+import { registerSteps } from "./steps.ts";
 
 export interface HarnessOptions {
 	/** Clock for timestamps and durations. Tests pass a fake one. */
@@ -21,7 +22,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 function harness(pi: ExtensionAPI, options: HarnessOptions): void {
 	const state = newState();
+	// Logging first: its session_start handler finds the project root that the others use.
 	registerLogging(pi, state, options.clock);
+	registerSteps(pi, state, options.clock);
 
 	pi.registerTool({
 		name: "harness_ping",

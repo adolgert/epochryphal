@@ -58,6 +58,8 @@ export class FakePi {
 	readonly sentMessages: { message: unknown; options: unknown }[] = [];
 	readonly entries: { customType: string; data: unknown }[] = [];
 	readonly notifications: Notification[] = [];
+	/** Calls to ctx.abort and ctx.waitForIdle, in order. */
+	readonly agentCalls: ("abort" | "waitForIdle")[] = [];
 	private toolCallCount = 0;
 
 	on: ExtensionAPI["on"] = ((event: string, handler: Handler) => {
@@ -138,8 +140,12 @@ export class FakePi {
 			}),
 			isIdle: () => options.idle ?? true,
 			hasPendingMessages: () => false,
-			abort: () => {},
-			waitForIdle: async () => {},
+			abort: () => {
+				this.agentCalls.push("abort");
+			},
+			waitForIdle: async () => {
+				this.agentCalls.push("waitForIdle");
+			},
 		});
 	}
 
