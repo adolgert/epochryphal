@@ -9,6 +9,7 @@ import type {
 	ExtensionCommandContext,
 	RegisteredCommand,
 	ToolDefinition,
+	ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 
 type AnyTool = ToolDefinition<any, any, any>;
@@ -62,6 +63,12 @@ export class FakePi {
 	readonly dialogs: { kind: "select" | "confirm" | "input"; title: string; message: unknown }[] = [];
 	/** Calls to ctx.abort and ctx.waitForIdle, in order. */
 	readonly agentCalls: ("abort" | "waitForIdle")[] = [];
+	/** Tools pi itself has, as getAllTools reports them. Tests may add others' tools here. */
+	readonly builtinTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+	/** The active tool names; registering a new tool activates it, as in pi. */
+	activeTools: string[] = ["read", "bash", "edit", "write"];
+	/** Arguments of each setActiveTools call, in order. */
+	readonly setActiveToolsCalls: string[][] = [];
 	private toolCallCount = 0;
 
 	on: ExtensionAPI["on"] = ((event: string, handler: Handler) => {
@@ -75,7 +82,22 @@ export class FakePi {
 	}) as ExtensionAPI["on"];
 
 	registerTool: ExtensionAPI["registerTool"] = (tool) => {
+		if (!this.tools.has(tool.name)) this.activeTools.push(tool.name);
 		this.tools.set(tool.name, tool as AnyTool);
+	};
+
+	getAllTools: ExtensionAPI["getAllTools"] = () => {
+		const info = (name: string, path: string) =>
+			({ name, description: "", parameters: {}, exposure: "direct", sourceInfo: { path, source: path, scope: "temporary", origin: "top-level" } }) as unknown as ToolInfo;
+		return [...this.builtinTools.map((n) => info(n, `builtin:${n}`)), ...[...this.tools.keys()].map((n) => info(n, "fake-extension"))];
+	};
+
+	getActiveTools: ExtensionAPI["getActiveTools"] = () => [...this.activeTools];
+
+	setActiveTools: ExtensionAPI["setActiveTools"] = (names) => {
+		this.setActiveToolsCalls.push([...names]);
+		const known = new Set([...this.builtinTools, ...this.tools.keys()]);
+		this.activeTools = names.filter((n) => known.has(n));
 	};
 
 	registerCommand: ExtensionAPI["registerCommand"] = (name, options) => {
@@ -103,6 +125,9 @@ export class FakePi {
 			sendUserMessage: this.sendUserMessage,
 			sendMessage: this.sendMessage,
 			appendEntry: this.appendEntry,
+			getAllTools: this.getAllTools,
+			getActiveTools: this.getActiveTools,
+			setActiveTools: this.setActiveTools,
 		});
 		factory(api);
 		return this;

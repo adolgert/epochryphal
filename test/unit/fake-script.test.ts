@@ -1,6 +1,8 @@
 // Level 1: the fake project script that stands in for check, build, and the other procedures.
 // The fake is called through the wrapper scripts that makeToyProject writes into harness/scripts/.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeToyProject, type ToyProject } from "../rig/toy-project.ts";
 
@@ -83,6 +85,21 @@ describe("fake-script", () => {
 		const result = JSON.parse(call(toy, "build").lastLine);
 		expect(result.ok).toBe(true);
 		expect(result.summary.length).toBe(50_000);
+	});
+
+	it("wait_for: prints its result only after the file exists", async () => {
+		toy = makeToyProject();
+		const release = join(toy.workDir, "release");
+		toy.setBehavior({ wait_for_job: [{ mode: "wait_for", file: release, ok: true, summary: "job done" }] });
+		const child = spawn("harness/scripts/wait_for_job", [], { cwd: toy.dir, stdio: ["ignore", "pipe", "inherit"] });
+		let out = "";
+		child.stdout.setEncoding("utf8").on("data", (d: string) => (out += d));
+		const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+		while (toy.scriptCalls().length === 0) await new Promise((r) => setTimeout(r, 10));
+		expect(out).not.toContain("job done"); // Still waiting: nothing has released it.
+		writeFileSync(release, "");
+		expect(await exited).toBe(0);
+		expect(JSON.parse(out.trimEnd().split("\n").at(-1)!)).toEqual({ ok: true, summary: "job done" });
 	});
 
 	it("records each call's arguments, standard input, and HARNESS_ variables", () => {

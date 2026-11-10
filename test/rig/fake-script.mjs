@@ -15,6 +15,7 @@
 //   { mode: "exit", code: 3 }            exit with that code
 //   { mode: "signal", signal: "SIGKILL" } die from that signal
 //   { mode: "big", chars: 50000 }        ok result whose summary has that many characters
+//   { mode: "wait_for", file: "<path>", ...result }  wait until the file exists, then print the result
 // Any entry may add "child": "group" or "escape". Before acting, the script then starts a child
 // that sleeps forever and holds the script's stdout and stderr open. "group" keeps the child in
 // the script's process group; "escape" puts it in a new session, out of reach of a group kill.
@@ -70,7 +71,7 @@ if (entry.child) {
 	writeFileSync(join(fakeDir, `child-${name}.pid`), String(child.pid));
 }
 
-const { mode, child: _child, ignore_term: _ignore, ...result } = entry;
+const { mode, child: _child, ignore_term: _ignore, file: _file, ...result } = entry;
 switch (mode) {
 	case "hang":
 		if (entry.ignore_term) process.on("SIGTERM", () => {});
@@ -87,6 +88,14 @@ switch (mode) {
 		process.kill(process.pid, entry.signal ?? "SIGKILL");
 		setInterval(() => {}, 1 << 30);
 		break;
+	case "wait_for": {
+		const poll = setInterval(() => {
+			if (!existsSync(entry.file)) return;
+			clearInterval(poll);
+			process.stdout.write(JSON.stringify(result) + "\n");
+		}, 10);
+		break;
+	}
 	case "big":
 		process.stdout.write(JSON.stringify({ ok: true, summary: "x".repeat(entry.chars ?? 10_000) }) + "\n");
 		break;
