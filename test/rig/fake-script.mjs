@@ -2,16 +2,23 @@
 // Fake project script. Stands in for check, build, and every other procedure in tests.
 //
 // Usage: fake-script.mjs <fake dir> <script name> [args...]
-//   <fake dir>/behavior.json  { "<script name>": [entry, ...] }
-//   <fake dir>/state/<name>   number of calls so far for that name
-//   <fake dir>/calls.jsonl    one record per call: name, args, stdin, HARNESS_* env
+//   <fake dir>/behavior.json      { "<script name>": [entry, ...] }
+//   <fake dir>/state/<name>       number of calls so far for that name
+//   <fake dir>/calls.jsonl        one record per call: name, pid, args, stdin, HARNESS_* env
+//   <fake dir>/child-<name>.pid   pid of the child started by an entry with "child"
 //
 // Each call uses the next entry for its name; the last entry repeats. A name with no entries
 // answers { ok: true }. An entry is a script result ({ ok, summary, signature?, ... }) or a mode:
-//   { mode: "hang" }               sleep until killed
-//   { mode: "garbage" }            print a last line that is not JSON, exit 0
-//   { mode: "exit", code: 3 }      exit with that code
-//   { mode: "big", chars: 50000 }  ok result whose summary has that many characters
+//   { mode: "hang" }                     sleep until killed
+//   { mode: "hang", ignore_term: true }  also ignore SIGTERM (needs SIGKILL)
+//   { mode: "garbage" }                  print a last line that is not JSON, exit 0
+//   { mode: "exit", code: 3 }            exit with that code
+//   { mode: "signal", signal: "SIGKILL" } die from that signal
+//   { mode: "big", chars: 50000 }        ok result whose summary has that many characters
+// Any entry may add "child": "group" or "escape". Before acting, the script then starts a child
+// that sleeps forever and holds the script's stdout and stderr open. "group" keeps the child in
+// the script's process group; "escape" puts it in a new session, out of reach of a group kill.
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -49,13 +56,24 @@ try {
 	stdin = stdinText;
 }
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("HARNESS_")));
-appendFileSync(join(fakeDir, "calls.jsonl"), JSON.stringify({ name, args, stdin, env }) + "\n");
+appendFileSync(join(fakeDir, "calls.jsonl"), JSON.stringify({ name, pid: process.pid, args, stdin, env }) + "\n");
 
 const entry = nextEntry();
 process.stdout.write(`fake ${name} ${args.join(" ")}\n`);
 
-switch (entry.mode) {
+if (entry.child) {
+	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], {
+		stdio: ["ignore", "inherit", "inherit"],
+		detached: entry.child === "escape",
+	});
+	child.unref();
+	writeFileSync(join(fakeDir, `child-${name}.pid`), String(child.pid));
+}
+
+const { mode, child: _child, ignore_term: _ignore, ...result } = entry;
+switch (mode) {
 	case "hang":
+		if (entry.ignore_term) process.on("SIGTERM", () => {});
 		setInterval(() => {}, 1 << 30);
 		break;
 	case "garbage":
@@ -65,11 +83,13 @@ switch (entry.mode) {
 		process.stderr.write(`fake ${name}: exiting with ${entry.code}\n`);
 		process.exit(entry.code ?? 1);
 		break;
+	case "signal":
+		process.kill(process.pid, entry.signal ?? "SIGKILL");
+		setInterval(() => {}, 1 << 30);
+		break;
 	case "big":
 		process.stdout.write(JSON.stringify({ ok: true, summary: "x".repeat(entry.chars ?? 10_000) }) + "\n");
 		break;
-	default: {
-		const { mode: _mode, ...result } = entry;
+	default:
 		process.stdout.write(JSON.stringify(result) + "\n");
-	}
 }

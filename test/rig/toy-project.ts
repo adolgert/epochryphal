@@ -4,7 +4,7 @@
 //   <root>/fake/      fake-script state, outside the project so it never shows in git status
 //   <root>/work/      scratch space for helpers (scripts, request records, pi config dirs)
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ export type Behavior = Record<string, FakeEntry[]>;
 
 export interface ScriptCall {
 	name: string;
+	pid: number;
 	args: string[];
 	stdin: unknown;
 	env: Record<string, string>;
@@ -37,12 +38,25 @@ export interface ToyProject {
 	workDir: string;
 	setBehavior(behavior: Behavior): void;
 	scriptCalls(): ScriptCall[];
+	/** Pid of the child started by the last call of `name` whose entry had "child", if any. */
+	childPid(name: string): number | undefined;
 	readConfig(): Record<string, unknown>;
 	readPlan(planId: string): unknown;
 	readEvents(): Record<string, unknown>[];
 	readSteps(): Record<string, unknown>[];
 	git(...args: string[]): string;
+	/** Kill any children the fake started, then remove everything. */
 	cleanup(): void;
+}
+
+/** Whether a process with this pid exists (and is not a zombie we could reap). */
+export function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** Script names that the default configuration points at. */
@@ -55,9 +69,9 @@ export function defaultConfig(): Record<string, unknown> {
 		max_summary_chars: 2000,
 		protected: ["harness/harness.json", "harness/scripts/**", "harness/lessons/**", "tests/**"],
 		kinds: {
-			restructure: { description: "Change structure, same results.", check: ["harness/scripts/check", "restructure"], check_timeout_s: 60, budget },
-			offload: { description: "Move a region to the GPU.", check: ["harness/scripts/check", "offload"], check_timeout_s: 60, budget },
-			measure: { description: "Record a profile.", check: ["harness/scripts/check", "measure"], check_timeout_s: 60, budget },
+			restructure: { description: "Change structure, same results.", check: ["harness/scripts/check", "restructure"], check_timeout_s: 60, budget: { ...budget } },
+			offload: { description: "Move a region to the GPU.", check: ["harness/scripts/check", "offload"], check_timeout_s: 60, budget: { ...budget } },
+			measure: { description: "Record a profile.", check: ["harness/scripts/check", "measure"], check_timeout_s: 60, budget: { ...budget } },
 		},
 		procedures: [
 			{
@@ -133,6 +147,11 @@ export function makeToyProject(options: ToyProjectOptions = {}): ToyProject {
 	};
 	setBehavior(options.behavior ?? {});
 
+	const childPid = (name: string) => {
+		const path = join(fakeDir, `child-${name}.pid`);
+		return existsSync(path) ? Number(readFileSync(path, "utf8")) : undefined;
+	};
+
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
 	git("init", "-q", "-b", "main");
 	git("-c", "user.name=toy", "-c", "user.email=toy@example.invalid", "add", ".");
@@ -145,11 +164,22 @@ export function makeToyProject(options: ToyProjectOptions = {}): ToyProject {
 		workDir,
 		setBehavior,
 		scriptCalls: () => readJsonl(join(fakeDir, "calls.jsonl")) as unknown as ScriptCall[],
+		childPid,
 		readConfig: () => JSON.parse(readFileSync(join(dir, "harness/harness.json"), "utf8")),
 		readPlan: (planId: string) => JSON.parse(readFileSync(join(dir, "harness/plans", `${planId}.json`), "utf8")),
 		readEvents: () => readJsonl(join(dir, "harness/log/events.jsonl")),
 		readSteps: () => readJsonl(join(dir, "harness/log/steps.jsonl")),
 		git,
-		cleanup: () => rmSync(root, { recursive: true, force: true }),
+		cleanup: () => {
+			const pidFiles = existsSync(fakeDir) ? readdirSync(fakeDir).filter((f) => /^child-.*\.pid$/.test(f)) : [];
+			for (const f of pidFiles) {
+				try {
+					process.kill(Number(readFileSync(join(fakeDir, f), "utf8")), "SIGKILL");
+				} catch {
+					// Already gone.
+				}
+			}
+			rmSync(root, { recursive: true, force: true });
+		},
 	};
 }

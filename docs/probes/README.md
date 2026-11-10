@@ -21,3 +21,7 @@ unset ANTHROPIC_API_KEY GEMINI_API_KEY OPENAI_API_KEY   # never let a probe reac
 - `rpc-probe.mjs`: RPC mode, answers dialogs.
 
 CLI probe: `cd proj && pi --no-extensions -e ../probe-ext.ts -e ../scripted-model.ts --model scripted/scripted-1 --mode json --no-context-files --no-skills --no-prompt-templates --offline --no-session "hello" < /dev/null`
+
+Other probes:
+
+- `typebox-record.mjs`: `Value.Errors` does report errors inside `Type.Record` entries, but returns at most 8 errors per value. Run from the repository root.
