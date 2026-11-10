@@ -1,0 +1,2 @@
+# The harness writes its event log, step log, script outputs, and control file here.
+log/

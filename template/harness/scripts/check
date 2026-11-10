@@ -1,0 +1,13 @@
+#!/bin/sh
+# Stub check. The harness runs: harness/scripts/check <kind> [check args...]
+# with the project root as working directory, one JSON object on standard input,
+# and HARNESS_PLAN, HARNESS_STEP, HARNESS_ATTEMPT, HARNESS_KIND in the environment.
+# Earlier lines of output are free-form; the last line must be one JSON object.
+# Exit 0 when the check ran; "ok" then says whether the step passed.
+# Replace this stub with a real check: it passes every step.
+kind="$1"
+shift
+input=$(cat)
+printf 'stub check: kind=%s args=%s step=%s attempt=%s\n' "$kind" "$*" "$HARNESS_STEP" "$HARNESS_ATTEMPT"
+printf 'stub check: input=%s\n' "$input"
+printf '{"ok": true, "summary": "Stub check for kind %s: it passes every step. Replace harness/scripts/check with a real check."}\n' "$kind"

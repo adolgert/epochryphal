@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stub procedure "build". The harness runs it with the project root as working
+# directory and {"params": {"variant": "cpu"|"gpu"}, "plan": ..., "step": ...,
+# "attempt": ..., "kind": ...} on standard input. The last line of output must be
+# one JSON object with "ok" and "summary"; "signature" is optional.
+# Replace this stub with the project's build.
+input=$(cat)
+printf 'stub build: input=%s\n' "$input"
+printf '{"ok": true, "summary": "Stub build: nothing was built. Replace harness/scripts/build with the real build."}\n'

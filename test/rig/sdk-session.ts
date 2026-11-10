@@ -88,6 +88,39 @@ export function scrubProcessEnv(): void {
 	for (const key of Object.keys(process.env)) if (!(key in clean)) delete process.env[key];
 }
 
+/**
+ * Counts runs that have been asked for (an idle `input`) but have not started yet. A command that
+ * calls sendUserMessage returns before its run starts, so a prompt must wait for it. Load
+ * `observe` as an extension and decrement `observer.pending` at each agent_start.
+ */
+export function requestedRuns(): { observer: { pending: number }; observe: (pi: ExtensionAPI) => void } {
+	const observer = { pending: 0 };
+	const observe = (pi: ExtensionAPI) => {
+		pi.on("input", async (event) => {
+			if (event.streamingBehavior === undefined) observer.pending++;
+		});
+	};
+	return { observer, observe };
+}
+
+/** Wait until pi has settled, including runs that were asked for but have not started. */
+export async function settleSession(session: AgentSession, observer: { pending: number }, timeoutMs: number, who: string): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	let quietChecks = 0;
+	while (quietChecks < 3) {
+		await new Promise((resolve) => setImmediate(resolve));
+		if (observer.pending === 0 && session.isIdle) {
+			quietChecks++;
+			continue;
+		}
+		quietChecks = 0;
+		if (Date.now() > deadline) {
+			throw new Error(`${who}: pi did not settle within ${timeoutMs} ms`);
+		}
+		await Promise.race([session.waitForIdle(), new Promise((resolve) => setTimeout(resolve, 10))]);
+	}
+}
+
 export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSession> {
 	const ownsProject = options.project === undefined;
 	const project = options.project ?? makeToyProject();
@@ -100,14 +133,7 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 	process.env.HARNESS_TEST_SCRIPT = scriptPath;
 	process.env.HARNESS_TEST_REQUESTS = requestsPath;
 
-	// Counts runs that have been asked for (an idle `input`) but have not started yet. A command
-	// that calls sendUserMessage returns before its run starts, so prompt() must wait for it.
-	const observer = { pending: 0 };
-	const observe = (pi: ExtensionAPI) => {
-		pi.on("input", async (event) => {
-			if (event.streamingBehavior === undefined) observer.pending++;
-		});
-	};
+	const { observer, observe } = requestedRuns();
 
 	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, ...options.settings });
 	const resourceLoader = new DefaultResourceLoader({
@@ -167,22 +193,7 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 
 	const assistantMessages = () => session.messages.filter((m): m is AssistantMessage => m.role === "assistant");
 
-	const settle = async () => {
-		const deadline = Date.now() + (options.settleTimeoutMs ?? 10_000);
-		let quietChecks = 0;
-		while (quietChecks < 3) {
-			await new Promise((resolve) => setImmediate(resolve));
-			if (observer.pending === 0 && session.isIdle) {
-				quietChecks++;
-				continue;
-			}
-			quietChecks = 0;
-			if (Date.now() > deadline) {
-				throw new Error(`runSdkSession: pi did not settle within ${options.settleTimeoutMs ?? 10_000} ms`);
-			}
-			await Promise.race([session.waitForIdle(), new Promise((resolve) => setTimeout(resolve, 10))]);
-		}
-	};
+	const settle = () => settleSession(session, observer, options.settleTimeoutMs ?? 10_000, "runSdkSession");
 
 	return {
 		session,

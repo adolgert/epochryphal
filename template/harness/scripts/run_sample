@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stub procedure "run_sample". It requires a successful "build" earlier in the
+# same step (see "requires" in harness.json). Replace this stub with a script
+# that runs a small workload and summarizes the result.
+input=$(cat)
+printf 'stub run_sample: input=%s\n' "$input"
+printf '{"ok": true, "summary": "Stub run_sample: nothing was run. Replace harness/scripts/run_sample with a real run.", "data": {"seconds": 0}}\n'

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "max_summary_chars": 2000,
+  "protected": ["harness/harness.json", "harness/scripts/**", "harness/lessons/**", "tests/**"],
+  "kinds": {
+    "restructure": {
+      "description": "Change code structure with no change in results.",
+      "check": ["harness/scripts/check", "restructure"],
+      "check_timeout_s": 1800,
+      "budget": { "tokens": 1500000, "cost_usd": 20, "agent_minutes": 60, "check_attempts": 5 }
+    },
+    "offload": {
+      "description": "Move a region to the GPU.",
+      "check": ["harness/scripts/check", "offload"],
+      "check_timeout_s": 3600,
+      "budget": { "tokens": 2000000, "cost_usd": 30, "agent_minutes": 90, "check_attempts": 5 }
+    },
+    "measure": {
+      "description": "Record a profile and a short note. No threshold.",
+      "check": ["harness/scripts/check", "measure"],
+      "check_timeout_s": 3600,
+      "budget": { "tokens": 500000, "cost_usd": 8, "agent_minutes": 30, "check_attempts": 3 }
+    }
+  },
+  "procedures": [
+    {
+      "name": "build",
+      "description": "Build the code. Use after any source change.",
+      "command": ["harness/scripts/build"],
+      "params": { "variant": { "type": "string", "enum": ["cpu", "gpu"], "description": "Which build." } },
+      "timeout_s": 1800,
+      "is_wait": false,
+      "requires": [],
+      "lesson_trigger": true
+    },
+    {
+      "name": "run_sample",
+      "description": "Run the small sample workload on the current build.",
+      "command": ["harness/scripts/run_sample"],
+      "params": {},
+      "timeout_s": 1800,
+      "is_wait": false,
+      "requires": ["build"],
+      "lesson_trigger": true
+    }
+  ],
+  "rules": { "supervised": "warn", "run_plan": "stop", "headless": "stop", "max_iterations": 3 },
+  "run_plan": { "approve": "ask" },
+  "headless": { "session_mode": "fresh_per_step" },
+  "lessons": { "max_per_result": 2, "max_chars": 1500 }
+}
