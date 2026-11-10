@@ -30,6 +30,8 @@ export interface ContextOptions {
 	cwd?: string;
 	/** Default true. */
 	idle?: boolean;
+	/** Default "fake-session". */
+	sessionId?: string;
 }
 
 export interface Notification {
@@ -130,6 +132,10 @@ export class FakePi {
 			mode: options.mode ?? (hasUI ? "tui" : "print"),
 			cwd: options.cwd ?? process.cwd(),
 			signal: undefined,
+			sessionManager: strict("ctx.sessionManager", {
+				getSessionId: () => options.sessionId ?? "fake-session",
+				getSessionFile: () => undefined,
+			}),
 			isIdle: () => options.idle ?? true,
 			hasPendingMessages: () => false,
 			abort: () => {},

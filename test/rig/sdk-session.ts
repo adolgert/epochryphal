@@ -23,6 +23,7 @@ import {
 	writeScript,
 } from "./script.ts";
 import { makeToyProject, type ToyProject } from "./toy-project.ts";
+import { createHarnessExtension, type HarnessOptions } from "../../src/extension/index.ts";
 
 export const EXTENSION_PATH = new URL("../../src/extension/index.ts", import.meta.url).pathname;
 
@@ -32,6 +33,8 @@ export interface SdkSessionOptions {
 	project?: ToyProject;
 	/** Extension paths to load besides the scripted model. Default: the harness extension. */
 	extensions?: string[];
+	/** Load the harness extension in-process with these options (for example a fake clock) instead of by path. */
+	harness?: HarnessOptions;
 	/** Store the session in a file under this directory instead of in memory. */
 	sessionDir?: string;
 	/** Longest time prompt() waits for pi to settle. Default 10 s. */
@@ -101,8 +104,8 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 		noPromptTemplates: true,
 		noContextFiles: true,
 		noThemes: true,
-		additionalExtensionPaths: [...(options.extensions ?? [EXTENSION_PATH]), SCRIPTED_MODEL_PATH],
-		extensionFactories: [observe],
+		additionalExtensionPaths: [...(options.extensions ?? (options.harness ? [] : [EXTENSION_PATH])), SCRIPTED_MODEL_PATH],
+		extensionFactories: [observe, ...(options.harness ? [createHarnessExtension(options.harness)] : [])],
 	});
 	await resourceLoader.reload();
 	const sessionManager = options.sessionDir
@@ -173,6 +176,9 @@ export async function runSdkSession(options: SdkSessionOptions): Promise<SdkSess
 			return last ? textOf(last.content) : undefined;
 		},
 		async dispose() {
+			// AgentSession.dispose() alone does not emit session_shutdown; pi's runtime emits it first.
+			await session.abort();
+			await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			unsubscribe();
 			session.dispose();
 			if (ownsProject) project.cleanup();

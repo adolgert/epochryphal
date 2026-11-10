@@ -22,6 +22,8 @@ export interface PiCliOptions {
 	mode?: "json" | "print";
 	/** Store sessions in this directory. Default: --no-session. */
 	sessionDir?: string;
+	/** Working directory for pi. Default: the project directory. */
+	cwd?: string;
 	/** Kill pi after this long. Default 15 s. */
 	timeoutMs?: number;
 }
@@ -70,7 +72,7 @@ export async function runPiCli(options: PiCliOptions): Promise<PiCliResult> {
 	};
 
 	// stdin must not be an open pipe: pi would wait for it to close (docs/pi-facts.md, change 3).
-	const child = spawn(PI_BIN, args, { cwd: options.project.dir, env, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(PI_BIN, args, { cwd: options.cwd ?? options.project.dir, env, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "";
 	let stderr = "";
 	child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
