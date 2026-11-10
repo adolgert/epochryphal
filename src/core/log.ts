@@ -1,6 +1,6 @@
 // The event log, harness/log/events.jsonl (plan Section 5.3): one JSON object per line, append-only.
 // Writing must never break the agent's work: failures are caught and the first one is reported.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Clock, systemClock } from "./clock.ts";
 import type { ScriptOutcome } from "./script.ts";
@@ -27,7 +27,8 @@ export interface LogContext {
 export interface EventFields {
 	session_start: { reason: string };
 	session_end: { reason: string };
-	step_start: { kind: string; goal: string; origin: string };
+	/** `commit` is the git commit when the step started, the base of the protected-file check. */
+	step_start: { kind: string; goal: string; origin: string; commit: string };
 	step_end: { outcome: "passed" | "blocked" | "abandoned" | "stopped"; detail: string | null };
 	model_call: {
 		model: string;
@@ -136,4 +137,19 @@ export class EventLog {
 			}
 		}
 	}
+}
+
+/** The records of an event log, oldest first. Lines that are not JSON objects are skipped. */
+export function readEvents(path: string): Record<string, unknown>[] {
+	if (!existsSync(path)) return [];
+	const records: Record<string, unknown>[] = [];
+	for (const line of readFileSync(path, "utf8").split("\n")) {
+		try {
+			const value: unknown = JSON.parse(line);
+			if (typeof value === "object" && value !== null && !Array.isArray(value)) records.push(value as Record<string, unknown>);
+		} catch {
+			// An empty or partly written line.
+		}
+	}
+	return records;
 }

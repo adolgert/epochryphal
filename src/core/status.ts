@@ -32,3 +32,19 @@ export function formatPlanStatus(plan: Plan, config: HarnessConfig): string {
 	}
 	return lines.join("\n");
 }
+
+/** What changed in a plan's steps, for the person to decide whether to accept a hand edit. */
+export function planDifference(before: Plan | undefined, after: Plan): string {
+	if (!before) return `the plan now has ${after.steps.length} steps`;
+	const changes: string[] = [];
+	if (before.steps.length !== after.steps.length) changes.push(`steps: ${before.steps.length} -> ${after.steps.length}`);
+	const old = new Map(before.steps.map((s) => [s.id, s]));
+	const ids = new Set(after.steps.map((s) => s.id));
+	for (const s of after.steps) {
+		const o = old.get(s.id);
+		if (!o) changes.push(`${s.id} added (${s.status})`);
+		else if (o.status !== s.status) changes.push(`${s.id}: ${o.status} -> ${s.status}`);
+	}
+	for (const o of before.steps) if (!ids.has(o.id)) changes.push(`${o.id} removed (was ${o.status})`);
+	return changes.length > 0 ? changes.join("; ") : "same steps and statuses; other fields changed";
+}

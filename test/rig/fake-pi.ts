@@ -58,6 +58,8 @@ export class FakePi {
 	readonly sentMessages: { message: unknown; options: unknown }[] = [];
 	readonly entries: { customType: string; data: unknown }[] = [];
 	readonly notifications: Notification[] = [];
+	/** Dialogs shown, in order, with their title and message (the second argument). */
+	readonly dialogs: { kind: "select" | "confirm" | "input"; title: string; message: unknown }[] = [];
 	/** Calls to ctx.abort and ctx.waitForIdle, in order. */
 	readonly agentCalls: ("abort" | "waitForIdle")[] = [];
 	private toolCallCount = 0;
@@ -114,14 +116,15 @@ export class FakePi {
 	context(options: ContextOptions = {}): ExtensionCommandContext {
 		const hasUI = options.hasUI ?? true;
 		const answers = { select: [...(options.ui?.select ?? [])], confirm: [...(options.ui?.confirm ?? [])], input: [...(options.ui?.input ?? [])] };
-		const take = <K extends keyof typeof answers>(kind: K, title: string): (typeof answers)[K][number] => {
+		const take = <K extends keyof typeof answers>(kind: K, title: string, message?: unknown): (typeof answers)[K][number] => {
+			this.dialogs.push({ kind, title, message });
 			if (answers[kind].length === 0) throw new Error(`FakePi: no scripted answer for ui.${kind}("${title}")`);
 			return answers[kind].shift() as (typeof answers)[K][number];
 		};
 		const ui = strict("ctx.ui", {
-			select: async (title: string) => take("select", title),
-			confirm: async (title: string) => take("confirm", title),
-			input: async (title: string) => take("input", title),
+			select: async (title: string, options: unknown) => take("select", title, options),
+			confirm: async (title: string, message: string) => take("confirm", title, message),
+			input: async (title: string, placeholder?: string) => take("input", title, placeholder),
 			notify: (message: string, type?: Notification["type"]) => {
 				this.notifications.push({ message, type });
 			},

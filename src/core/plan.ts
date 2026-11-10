@@ -222,6 +222,8 @@ export interface ReadResult {
 	changedExternally: boolean;
 	/** Hash of the text this plan was parsed from; pass it to accept(). */
 	hash: string;
+	/** The plan as this store last wrote or accepted it, when known; for showing what changed. */
+	previous: Plan | undefined;
 }
 
 /**
@@ -230,7 +232,9 @@ export interface ReadResult {
  */
 export class PlanStore {
 	readonly dir: string;
-	private readonly known = new Map<string, string>();
+	private readonly known = new Map<string, { hash: string; plan: Plan | undefined }>();
+	/** The last plan read() parsed, so accept() can remember it along with its hash. */
+	private readonly parsed = new Map<string, { hash: string; plan: Plan }>();
 
 	constructor(root: string, harnessDir = "harness") {
 		this.dir = join(root, harnessDir, "plans");
@@ -257,14 +261,18 @@ export class PlanStore {
 		const problems = planProblems(value);
 		if (problems.length > 0) throw new PlanError(`plan ${planId} is not valid:\n  - ${problems.join("\n  - ")}`);
 		const hash = hashOf(text);
+		const plan = value as Plan;
 		const known = this.known.get(planId);
-		if (known === undefined) this.known.set(planId, hash);
-		return { plan: value as Plan, changedExternally: known !== undefined && known !== hash, hash };
+		if (known === undefined) this.known.set(planId, { hash, plan });
+		this.parsed.set(planId, { hash, plan });
+		const changedExternally = known !== undefined && known.hash !== hash;
+		return { plan, changedExternally, hash, previous: changedExternally ? known.plan : undefined };
 	}
 
 	/** Treat the plan text that read() returned, identified by its hash, as known. */
 	accept(planId: string, hash: string): void {
-		this.known.set(planId, hash);
+		const parsed = this.parsed.get(planId);
+		this.known.set(planId, { hash, plan: parsed?.hash === hash ? parsed.plan : undefined });
 	}
 
 	/** Write a plan atomically and remember its hash. */
@@ -274,7 +282,7 @@ export class PlanStore {
 		const path = this.pathOf(plan.plan_id);
 		writeFileSync(`${path}.tmp`, text);
 		renameSync(`${path}.tmp`, path);
-		this.known.set(plan.plan_id, hashOf(text));
+		this.known.set(plan.plan_id, { hash: hashOf(text), plan });
 	}
 
 	/** Write a new plan; refuses to overwrite an existing one. */

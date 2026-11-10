@@ -235,16 +235,93 @@ describe("step commands", () => {
 		expect(errors(pi)).toEqual([expect.stringMatching(/proposals\[0\] must be an object/)]);
 	});
 
-	it("uses a plan edited by hand, with a warning", async () => {
+	/** Plan e1 with s1 abandoned and s2 pending, then edited by hand: s2 removed, goal changed. */
+	async function handEdited(t: ToyProject) {
+		const ctx = await session(t);
+		await ctx.run("/plan-new e1 Goal");
+		await ctx.run("/step measure -- One");
+		await ctx.run("/abandon wrong");
+		await ctx.run("/add-step measure -- Two");
+		const path = join(t.dir, "harness/plans/e1.json");
+		const plan = JSON.parse(readFileSync(path, "utf8"));
+		plan.goal = "Edited goal";
+		plan.steps = [{ ...plan.steps[0], status: "pending", reason: undefined }];
+		writeFileSync(path, JSON.stringify(plan, null, 2));
+		return ctx;
+	}
+
+	it("asks before using a plan edited by hand, showing the change in steps and statuses", async () => {
 		toy = makeToyProject();
-		const { pi, run } = await session(toy);
-		await run("/plan-new e1 Goal");
-		const path = join(toy.dir, "harness/plans/e1.json");
-		writeFileSync(path, readFileSync(path, "utf8").replace('"goal": "Goal"', '"goal": "Edited goal"'));
-		await run("/step measure -- Profile it");
-		expect(pi.notifications.some((n) => n.type === "warning" && /changed outside the harness/.test(n.message))).toBe(true);
-		expect(String(pi.sentUserMessages[0]!.content)).toMatch(/Epoch goal: Edited goal/);
+		const { pi, run } = await handEdited(toy);
+		await run("/next-step", { ui: { confirm: [true] } });
+		expect(pi.dialogs).toEqual([
+			{ kind: "confirm", title: "Plan e1 was changed outside the harness", message: "steps: 2 -> 1; s1: abandoned -> pending; s2 removed (was pending)\nUse the plan file as it is now?" },
+		]);
+		expect(String(pi.sentUserMessages.at(-1)!.content)).toMatch(/Epoch goal: Edited goal/);
+		expect(toy.readPlan("e1")).toMatchObject({ steps: [{ id: "s1", status: "active" }] });
+		await run("/plan-status");
+		expect(pi.dialogs).toHaveLength(1);
 	});
+
+	it("changes nothing when the person refuses a plan edited by hand, and asks again next time", async () => {
+		toy = makeToyProject();
+		const { pi, run } = await handEdited(toy);
+		const before = readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8");
+		const events = toy.readEvents().length;
+		const sent = pi.sentUserMessages.length;
+		await run("/next-step", { ui: { confirm: [false] } });
+		expect(readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8")).toBe(before);
+		expect(toy.readEvents()).toHaveLength(events);
+		expect(pi.sentUserMessages).toHaveLength(sent);
+		expect(errors(pi)).toEqual([expect.stringMatching(/the change to plan e1 was not accepted; nothing was done/)]);
+		await run("/plan-status", { ui: { confirm: [false] } });
+		expect(pi.dialogs).toHaveLength(2);
+	});
+
+	it("without a user interface refuses a plan edited by hand and logs plan_changed_externally", async () => {
+		toy = makeToyProject();
+		const { pi, run } = await handEdited(toy);
+		const before = readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8");
+		const sent = pi.sentUserMessages.length;
+		await run("/next-step", { hasUI: false });
+		expect(readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8")).toBe(before);
+		expect(pi.sentUserMessages).toHaveLength(sent);
+		expect(toy.readEvents().at(-1)).toMatchObject({ type: "plan_changed_externally", plan: "e1" });
+		expect(toy.readEvents().filter((e) => e.type === "step_start")).toHaveLength(1);
+	});
+
+	it("/plan-use accepts the file as it is", async () => {
+		toy = makeToyProject();
+		const { pi, run } = await handEdited(toy);
+		await run("/plan-use e1");
+		await run("/next-step");
+		expect(pi.dialogs).toEqual([]);
+		expect(toy.readPlan("e1")).toMatchObject({ steps: [{ id: "s1", status: "active" }] });
+	});
+
+	for (const [name, setup] of [
+		["/next-step", ["/add-step offload R17 -- Port R17"]],
+		["/retry-step", ["/step offload R17 -- Port R17", "/abandon later"]],
+	] as const) {
+		it(`${name} refuses a step whose kind harness.json no longer defines, before any write`, async () => {
+			toy = makeToyProject();
+			const { pi, run } = await session(toy);
+			await run("/plan-new e1 Goal");
+			for (const line of setup) await run(line);
+			const plan = readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8");
+			const events = toy.readEvents().length;
+			const sent = pi.sentUserMessages.length;
+			const config = toy.readConfig() as { kinds: Record<string, unknown> };
+			delete config.kinds.offload;
+			writeFileSync(join(toy.dir, "harness/harness.json"), JSON.stringify(config));
+			await run(name);
+			expect(errors(pi)).toEqual([expect.stringMatching(/step s1 has kind "offload", which harness.json no longer defines/)]);
+			expect(readFileSync(join(toy.dir, "harness/plans/e1.json"), "utf8")).toBe(plan);
+			expect(toy.readEvents()).toHaveLength(events);
+			expect(pi.sentUserMessages).toHaveLength(sent);
+			expect(await sections(pi)).toEqual({ other: "kept" });
+		});
+	}
 });
 
 describe("system-prompt line and restore", () => {

@@ -16,6 +16,7 @@ import {
 	startStep,
 	type StepStatus,
 } from "../../src/core/plan.ts";
+import { planDifference } from "../../src/core/status.ts";
 import { activeStepLine, stepPrompt } from "../../src/core/prompt.ts";
 import { makeToyProject, type ToyProject } from "../rig/toy-project.ts";
 
@@ -239,6 +240,24 @@ describe("PlanStore", () => {
 		expect(second).toMatchObject({ changedExternally: true, plan: { goal: "edited by hand" } });
 		store.accept("e1", second.hash);
 		expect(store.read("e1").changedExternally).toBe(false);
+	});
+
+	it("returns the plan as last written or accepted, to show what a hand edit changed", () => {
+		toy = makeToyProject();
+		const store = new PlanStore(toy.dir);
+		const written = addStep(addStep(newPlan("e1", "g", T), { kind: "measure", goal: "one" }).plan, { kind: "measure", goal: "two" }).plan;
+		store.create(written);
+		const edited = { ...written, steps: [{ ...written.steps[0]!, status: "active" }, ...written.steps.slice(1), { ...written.steps[0]!, id: "s3" }] };
+		writeFileSync(store.pathOf("e1"), JSON.stringify(edited));
+		const read = store.read("e1");
+		expect(read.previous).toEqual(written);
+		expect(planDifference(read.previous, read.plan)).toBe("steps: 2 -> 3; s1: pending -> active; s3 added (pending)");
+		store.accept("e1", read.hash);
+		writeFileSync(store.pathOf("e1"), JSON.stringify({ ...edited, goal: "other" }));
+		const again = store.read("e1");
+		expect(again.previous).toEqual(edited);
+		expect(planDifference(again.previous, again.plan)).toBe("same steps and statuses; other fields changed");
+		expect(planDifference(undefined, again.plan)).toBe("the plan now has 3 steps");
 	});
 
 	it("accepts the text that read returned, not a later change on disk", () => {

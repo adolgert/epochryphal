@@ -53,7 +53,7 @@ describe("EventLog", () => {
 		const log = new EventLog({ path, context: () => context });
 		log.write("session_start", { reason: "startup" });
 		context = { session: "a", mode: "supervised", step: { plan: "e1", step: "s1", attempt: 1 } };
-		log.write("step_start", { kind: "measure", goal: "g", origin: "user" });
+		log.write("step_start", { kind: "measure", goal: "g", origin: "user", commit: "abc123" });
 		expect(read(path).map((r) => r.step)).toEqual([null, "s1"]);
 	});
 

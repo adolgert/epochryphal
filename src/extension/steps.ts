@@ -1,6 +1,7 @@
 // The person's plan and step commands (plan Section 7.1), the step prompt (7.2), and restoring
 // the active step when a session starts (Section 8).
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { type Clock, systemClock } from "../core/clock.ts";
 import { CommandError, parseStepArgs, parseWordAndText } from "../core/commands.ts";
 import { ConfigError, type HarnessConfig, loadConfig } from "../core/config.ts";
@@ -17,15 +18,31 @@ import {
 	PlanStore,
 	retryStep,
 	type Step,
+	type StepOutcome,
 	startStep,
 } from "../core/plan.ts";
+import { readEvents, type StepRef } from "../core/log.ts";
 import { activeStepLine, stepPrompt } from "../core/prompt.ts";
-import { formatPlanStatus } from "../core/status.ts";
-import { type HarnessState, report, say } from "./state.ts";
+import { changedProtected, currentCommit, GitError } from "../core/protect.ts";
+import { formatPlanStatus, planDifference } from "../core/status.ts";
+import { type ActiveStep, type HarnessState, report, say } from "./state.ts";
 
 const DECISIONS: ExitDecision[] = ["keep", "revert", "continue"];
 
-export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Clock = systemClock): void {
+/** Errors that are refusals with a message for the person or the agent, not bugs. */
+export const isRefusal = (e: unknown): e is Error =>
+	e instanceof CommandError || e instanceof PlanError || e instanceof ConfigError || e instanceof GitError;
+
+/** What the completion tools need from the step commands. */
+export interface StepsApi {
+	store(): PlanStore;
+	config(): HarnessConfig;
+	activePlan(ctx: ExtensionContext): Promise<Plan>;
+	/** End the active step: write the plan, log step_end, and clear the active step. */
+	finish(plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null): void;
+}
+
+export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Clock = systemClock): StepsApi {
 	const now = () => new Date(clock.now());
 
 	/** The store, or a refusal that explains why the harness is inactive. */
@@ -38,24 +55,52 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		return loadConfig(state.root!, state.harnessDir);
 	};
 
-	/** The active plan. A plan changed on disk by someone else is accepted with a notice. */
-	const activePlan = (): Plan => {
+	/**
+	 * The active plan. A plan changed on disk by someone else is used only when the person accepts
+	 * the change in a dialog. Without a user interface it is refused and logged.
+	 */
+	const activePlan = async (ctx: ExtensionContext): Promise<Plan> => {
 		const s = store();
 		const id = s.activeId();
 		if (id === null) throw new CommandError("no active plan; create one with /plan-new <plan_id> <goal> or choose one with /plan-use <plan_id>");
-		const { plan, changedExternally, hash } = s.read(id);
-		if (changedExternally) {
-			report(state, `plan ${id} was changed outside the harness; using the file as it is now`, "warning");
-			s.accept(id, hash);
-			syncActive(plan);
+		const { plan, changedExternally, hash, previous } = s.read(id);
+		if (!changedExternally) return plan;
+		const difference = planDifference(previous, plan);
+		if (!ctx.hasUI) {
+			state.log?.write("plan_changed_externally", { plan: id });
+			throw new CommandError(`plan ${id} was changed outside the harness (${difference}); without a user interface the change is not accepted. Nothing was done.`);
 		}
+		// The hash is of the text read above: a later change is caught by the next read.
+		if (!(await ctx.ui.confirm(`Plan ${id} was changed outside the harness`, `${difference}\nUse the plan file as it is now?`))) {
+			throw new CommandError(`the change to plan ${id} was not accepted; nothing was done`);
+		}
+		s.accept(id, hash);
+		syncActive(plan);
 		return plan;
 	};
 
-	/** Make state.step match the plan's active step. */
-	const syncActive = (plan: Plan | null) => {
+	/** The commit in the step_start event of a step attempt, or null when the log has none. */
+	const recordedCommit = (ref: StepRef): string | null => {
+		const path = join(state.root!, state.harnessDir, "log", "events.jsonl");
+		const start = readEvents(path).findLast(
+			(e) => e.type === "step_start" && e.plan === ref.plan && e.step === ref.step && e.attempt === ref.attempt,
+		);
+		return typeof start?.commit === "string" ? start.commit : null;
+	};
+
+	/** Make state.step match the plan's active step. `commit` is given when the step starts now. */
+	const syncActive = (plan: Plan | null, commit?: string) => {
 		const step = plan && activeStep(plan);
-		state.step = step ? { plan: plan.plan_id, step: step.id, attempt: step.attempt, kind: step.kind, goal: step.goal } : null;
+		if (!step) return void (state.step = null);
+		const ref = { plan: plan.plan_id, step: step.id, attempt: step.attempt };
+		const same = state.step?.plan === ref.plan && state.step.step === ref.step && state.step.attempt === ref.attempt;
+		state.step = { ...ref, kind: step.kind, goal: step.goal, commit: commit ?? (same ? state.step!.commit : recordedCommit(ref)) };
+	};
+
+	const finish = (plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null) => {
+		store().write(endStep(plan, stepId, outcome, detail ?? undefined));
+		state.log?.write("step_end", { outcome, detail });
+		syncActive(null);
 	};
 
 	const requireIdle = (ctx: ExtensionCommandContext) => {
@@ -68,11 +113,18 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 
 	/** Write a plan whose step is now active, log it, and hand the step to the agent. */
 	const begin = (plan: Plan, step: Step) => {
-		// Build the prompt first: a broken harness.json must leave the plan, state, and log untouched.
-		const prompt = stepPrompt(plan, step, config().protected);
+		// Every refusal comes before the first write: the plan, state, and log stay untouched.
+		const cfg = config();
+		if (!cfg.kinds[step.kind]) {
+			throw new CommandError(`step ${step.id} has kind "${step.kind}", which harness.json no longer defines (kinds: ${Object.keys(cfg.kinds).join(", ")}); add the kind back or change the step in the plan file`);
+		}
+		const commit = currentCommit(state.root!);
+		const dirty = changedProtected(state.root!, commit, cfg.protected);
+		if (dirty.length > 0) throw new CommandError(`protected files have uncommitted changes: ${dirty.join(", ")}; commit or restore them before starting a step`);
+		const prompt = stepPrompt(plan, step, cfg.protected);
 		store().write(plan);
-		syncActive(plan);
-		state.log?.write("step_start", { kind: step.kind, goal: step.goal, origin: step.origin });
+		syncActive(plan, commit);
+		state.log?.write("step_start", { kind: step.kind, goal: step.goal, origin: step.origin, commit });
 		pi.sendUserMessage(prompt);
 	};
 
@@ -85,7 +137,7 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 				try {
 					await handler(args, ctx);
 				} catch (e) {
-					if (e instanceof CommandError || e instanceof PlanError || e instanceof ConfigError) report(state, e.message);
+					if (isRefusal(e)) report(state, e.message);
 					else throw e;
 				}
 			},
@@ -100,6 +152,10 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		try {
 			const id = state.store.activeId();
 			syncActive(id && state.store.exists(id) ? state.store.read(id).plan : null);
+			const restored = state.step as ActiveStep | null; // syncActive set it; TypeScript cannot see that.
+			if (restored && restored.commit === null) {
+				report(state, `step ${restored.step} is active, but the log has no commit for when it started, so submit cannot check protected files; /abandon it and /retry-step`, "warning");
+			}
 		} catch (e) {
 			report(state, `cannot restore the active plan: ${(e as Error).message}`);
 		}
@@ -126,50 +182,51 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		if (id === "") throw new CommandError("usage: /plan-use <plan_id>");
 		requireNoActiveStep("switching plans");
 		const s = store();
-		const { plan } = s.read(id);
+		const { plan, hash } = s.read(id);
+		s.accept(id, hash); // The person chose this file as it is.
 		s.setActive(id);
 		syncActive(plan);
 		say(state, `Plan ${id} is active.`);
 	});
 
-	command("plan-status", "Show the active plan, its steps, open proposals, and the active step's budget", () => {
-		say(state, formatPlanStatus(activePlan(), config()));
+	command("plan-status", "Show the active plan, its steps, open proposals, and the active step's budget", async (_args, ctx) => {
+		say(state, formatPlanStatus(await activePlan(ctx), config()));
 	});
 
-	command("plan-close", "Record the closing decision: /plan-close <keep|revert|continue> <note>", (args) => {
+	command("plan-close", "Record the closing decision: /plan-close <keep|revert|continue> <note>", async (args, ctx) => {
 		const { word, text: note } = parseWordAndText(args, "/plan-close <keep|revert|continue> <note>");
 		if (!DECISIONS.includes(word as ExitDecision)) throw new CommandError(`the decision must be one of ${DECISIONS.join(", ")}`);
-		const plan = closePlan(activePlan(), word as ExitDecision, note, now());
+		const plan = closePlan(await activePlan(ctx), word as ExitDecision, note, now());
 		store().write(plan);
 		say(state, `Plan ${plan.plan_id} closed: ${word}.`);
 	});
 
-	command("step", "Add a step and start it: /step <kind> [check args...] -- <goal>", (args, ctx) => {
+	command("step", "Add a step and start it: /step <kind> [check args...] -- <goal>", async (args, ctx) => {
 		requireIdle(ctx);
-		const plan = activePlan();
+		const plan = await activePlan(ctx);
 		const spec = parseStepArgs(args, Object.keys(config().kinds));
 		const added = addStep(plan, spec);
 		begin(startStep(added.plan, added.step.id), { ...added.step, status: "active" });
 	});
 
-	command("add-step", "Add a step without starting it: /add-step <kind> [check args...] -- <goal>", (args) => {
+	command("add-step", "Add a step without starting it: /add-step <kind> [check args...] -- <goal>", async (args, ctx) => {
 		const spec = parseStepArgs(args, Object.keys(config().kinds));
-		const { plan, step } = addStep(activePlan(), spec);
+		const { plan, step } = addStep(await activePlan(ctx), spec);
 		store().write(plan);
 		say(state, `Added ${step.id} (${step.kind}): ${step.goal}`);
 	});
 
-	command("next-step", "Start the first pending step", (_args, ctx) => {
+	command("next-step", "Start the first pending step", async (_args, ctx) => {
 		requireIdle(ctx);
-		const plan = activePlan();
+		const plan = await activePlan(ctx);
 		const step = firstPending(plan);
 		if (!step) throw new CommandError(`plan ${plan.plan_id} has no pending step; add one with /add-step or /step`);
 		begin(startStep(plan, step.id), { ...step, status: "active" });
 	});
 
-	command("retry-step", "Start a blocked, abandoned, or stopped step again: /retry-step [step_id]", (args, ctx) => {
+	command("retry-step", "Start a blocked, abandoned, or stopped step again: /retry-step [step_id]", async (args, ctx) => {
 		requireIdle(ctx);
-		const { plan, step } = retryStep(activePlan(), args.trim() || undefined);
+		const { plan, step } = retryStep(await activePlan(ctx), args.trim() || undefined);
 		begin(plan, step);
 	});
 
@@ -182,12 +239,12 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 			await ctx.waitForIdle();
 		}
 		// Read after the agent has stopped: the step may have ended meanwhile.
-		const plan = activePlan();
+		const plan = await activePlan(ctx);
 		const step = activeStep(plan);
 		if (!step) throw new CommandError("no step is active");
-		store().write(endStep(plan, step.id, "abandoned", reason));
-		state.log?.write("step_end", { outcome: "abandoned", detail: reason });
-		syncActive(null);
+		finish(plan, step.id, "abandoned", reason);
 		say(state, `Step ${step.id} abandoned: ${reason}`);
 	});
+
+	return { store, config, activePlan, finish };
 }

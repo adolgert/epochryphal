@@ -7,6 +7,8 @@ import type { PlanStore } from "../core/plan.ts";
 export interface ActiveStep extends StepRef {
 	kind: string;
 	goal: string;
+	/** The git commit when the step started, from its step_start event; null when not found. */
+	commit: string | null;
 }
 
 export interface HarnessState {

@@ -124,3 +124,10 @@ Use `isToolCallEventType("edit", event)` to narrow the type. The path may carry 
 - **Extensions load through jiti**, so the package needs no build step for pi to load it. `tsc --noEmit` is used only for type checking.
 - **Project trust:** extensions given with `-e` load without a trust prompt (probed: no prompt in JSON or SDK mode). Loading through a project's `.pi/settings.json` requires the project to be trusted, or `-a` / `--approve`.
 - **Registry access:** `npm view` reached the registry from this machine (vitest 5.1.0 is the latest; pi itself uses 4.1.12). Step 1 needs `npm install`.
+
+## Found in Step 5
+
+- **Tools get a full context.** `ExtensionToolContext` extends `ExtensionContext`, so a tool's `execute` has `ctx.hasUI` and `ctx.ui.confirm(title, message)`. `submit` uses this to ask about a plan edited by hand. Read in `dist/core/extensions/types.d.ts`.
+- **`isToolCallEventType(name, event)`** only compares `event.toolName === name` (read in `dist/core/extensions/types.js`). Calls that another tool makes through `ctx.executeTool` also fire `tool_call` (with `parentToolCallId`), so the guard sees nested `edit` and `write` calls too. Read in the types; not probed.
+- **`terminate: true` from `submit` ends the run** in an SDK session: the next script entry was never requested (test/sdk/completion.test.ts). This confirms fact 5 for a tool registered by the harness.
+- **A blocked built-in `edit`** returns the block reason to the model as an error tool result, and the file stays unchanged (test/sdk/completion.test.ts).
