@@ -11,7 +11,7 @@ import { guardReason, projectPath } from "../core/protect.ts";
 import type { HarnessState } from "./state.ts";
 import { isRefusal, type StepsApi } from "./steps.ts";
 
-const reply = (text: string, extra: { isError?: boolean; terminate?: boolean } = {}) => ({
+export const reply = (text: string, extra: { isError?: boolean; terminate?: boolean } = {}) => ({
 	content: [{ type: "text" as const, text }],
 	details: undefined,
 	...extra,

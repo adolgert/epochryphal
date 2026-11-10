@@ -1,4 +1,4 @@
-// The text of /plan-status.
+// The text of /plan-status and /proposals.
 import type { Budget, HarnessConfig } from "./config.ts";
 import type { Plan, Step } from "./plan.ts";
 
@@ -30,6 +30,19 @@ export function formatPlanStatus(plan: Plan, config: HarnessConfig): string {
 			`Budget for ${active.id}: ${budget.tokens} tokens, $${budget.cost_usd}, ${budget.agent_minutes} agent minutes, ${budget.check_attempts} check attempts`,
 		);
 	}
+	return lines.join("\n");
+}
+
+/** The text of /proposals: the open proposals with their rationale. */
+export function formatProposals(plan: Plan): string {
+	const open = plan.proposals.filter((p) => p.state === "open");
+	if (open.length === 0) return `Plan ${plan.plan_id} has no open proposals.`;
+	const lines = [`Open proposals in plan ${plan.plan_id}:`];
+	for (const p of open) {
+		const args = p.check_args.length > 0 ? ` [${p.check_args.join(" ")}]` : "";
+		lines.push(`  ${p.id} ${p.kind}${args}: ${p.goal}`, `     why: ${p.rationale} (proposed in ${p.proposed_in_step ?? "no step"})`);
+	}
+	lines.push("Accept with /accept-step <id> [start], or reject with /reject-step <id> [reason].");
 	return lines.join("\n");
 }
 

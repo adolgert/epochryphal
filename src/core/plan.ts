@@ -153,6 +153,68 @@ export function closePlan(plan: Plan, decision: ExitDecision, note: string, now:
 	return { ...plan, exit: { decision, note: note.trim(), at: now.toISOString() } };
 }
 
+export const MAX_OPEN_PROPOSALS = 10;
+
+function findProposal(plan: Plan, id: string): Proposal {
+	const proposal = plan.proposals.find((p) => p.id === id);
+	if (!proposal) throw new PlanError(`plan ${plan.plan_id} has no proposal ${id}; /proposals lists the open ones`);
+	return proposal;
+}
+
+function requireOpenProposal(plan: Plan, id: string): Proposal {
+	requireOpen(plan);
+	const proposal = findProposal(plan, id);
+	if (proposal.state !== "open") throw new PlanError(`proposal ${id} is already ${proposal.state}`);
+	return proposal;
+}
+
+function withProposal(plan: Plan, id: string, change: Partial<Proposal>): Plan {
+	return { ...plan, proposals: plan.proposals.map((p) => (p.id === id ? { ...p, ...change } : p)) };
+}
+
+export interface NewProposal {
+	kind: string;
+	goal: string;
+	check_args?: string[];
+	rationale: string;
+	proposed_in_step: string | null;
+}
+
+/** Add an open proposal. Ids are p1, p2, ...: one more than the highest number used so far. */
+export function addProposal(plan: Plan, spec: NewProposal): { plan: Plan; proposal: Proposal } {
+	requireOpen(plan);
+	if (spec.goal.trim() === "") throw new PlanError("the proposal needs a goal");
+	if (spec.rationale.trim() === "") throw new PlanError("the proposal needs a rationale: say why this step should come next");
+	const open = plan.proposals.filter((p) => p.state === "open").length;
+	if (open >= MAX_OPEN_PROPOSALS) {
+		throw new PlanError(`plan ${plan.plan_id} already has ${open} open proposals, the most allowed; a person must accept or reject some first`);
+	}
+	const numbers = plan.proposals.map((p) => Number(/^p(\d+)$/.exec(p.id)?.[1] ?? 0));
+	const proposal: Proposal = {
+		id: `p${Math.max(0, ...numbers) + 1}`,
+		kind: spec.kind,
+		goal: spec.goal.trim(),
+		check_args: spec.check_args ?? [],
+		rationale: spec.rationale.trim(),
+		proposed_in_step: spec.proposed_in_step,
+		state: "open",
+	};
+	return { plan: { ...plan, proposals: [...plan.proposals, proposal] }, proposal };
+}
+
+/** open -> accepted, with a new pending step whose origin names the proposal. */
+export function acceptProposal(plan: Plan, id: string): { plan: Plan; step: Step } {
+	const p = requireOpenProposal(plan, id);
+	return addStep(withProposal(plan, id, { state: "accepted" }), { kind: p.kind, goal: p.goal, check_args: p.check_args, origin: `proposal:${id}` });
+}
+
+/** open -> rejected. The reason is optional. */
+export function rejectProposal(plan: Plan, id: string, reason?: string): Plan {
+	requireOpenProposal(plan, id);
+	const why = reason?.trim();
+	return withProposal(plan, id, why ? { state: "rejected", reason: why } : { state: "rejected" });
+}
+
 /** Problems with a plan read from disk (a person may have edited it). Empty when valid. */
 export function planProblems(value: unknown): string[] {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return ["the plan must be a JSON object"];
@@ -167,9 +229,12 @@ export function planProblems(value: unknown): string[] {
 		allowed.includes(v as string) || problems.push(`${path} must be one of ${allowed.join(", ")}`);
 	if (!Array.isArray(p.proposals)) problems.push("proposals must be a list");
 	else {
+		const proposalIds = new Set<unknown>();
 		p.proposals.forEach((q: unknown, i: number) => {
 			const path = `proposals[${i}]`;
 			if (!isObject(q)) return void problems.push(`${path} must be an object`);
+			if (proposalIds.has(q.id)) problems.push(`${path}.id "${String(q.id)}" is used twice`);
+			proposalIds.add(q.id);
 			for (const key of ["id", "kind", "goal", "rationale"]) str(q[key], `${path}.${key}`);
 			strList(q.check_args, `${path}.check_args`);
 			if (q.proposed_in_step !== null && typeof q.proposed_in_step !== "string") problems.push(`${path}.proposed_in_step must be a string or null`);

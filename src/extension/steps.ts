@@ -41,6 +41,13 @@ export interface StepsApi {
 	activePlan(ctx: ExtensionContext): Promise<Plan>;
 	/** End the active step: write the plan, log step_end, and clear the active step. */
 	finish(plan: Plan, stepId: string, outcome: StepOutcome, detail: string | null): void;
+	/**
+	 * Start a step whose status in `plan` is already active: refuse (before any write) on an unknown
+	 * kind or changed protected files, else write the plan, call `afterWrite`, log step_start, and send the prompt.
+	 */
+	begin(plan: Plan, step: Step, afterWrite?: () => void): void;
+	/** Refuse while the agent is working. */
+	requireIdle(ctx: ExtensionCommandContext): void;
 }
 
 type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
@@ -140,7 +147,7 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 	};
 
 	/** Write a plan whose step is now active, log it, and hand the step to the agent. */
-	const begin = (plan: Plan, step: Step) => {
+	const begin = (plan: Plan, step: Step, afterWrite?: () => void) => {
 		// Every refusal comes before the first write: the plan, state, and log stay untouched.
 		const cfg = config();
 		if (!cfg.kinds[step.kind]) {
@@ -151,6 +158,7 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		if (dirty.length > 0) throw new CommandError(`protected files have uncommitted changes: ${dirty.join(", ")}; commit or restore them before starting a step`);
 		const prompt = stepPrompt(plan, step, cfg.protected);
 		store().write(plan);
+		afterWrite?.(); // Before the log context moves to the new step.
 		syncActive(plan, commit);
 		state.log?.write("step_start", { kind: step.kind, goal: step.goal, origin: step.origin, commit });
 		state.starting = { plan: plan.plan_id, step: step.id, attempt: step.attempt, prompt };
@@ -278,5 +286,5 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 		say(state, `Step ${step.id} abandoned: ${reason}`);
 	});
 
-	return { store, config, activePlan, finish };
+	return { store, config, activePlan, finish, begin, requireIdle };
 }
