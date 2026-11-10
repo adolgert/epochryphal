@@ -6,7 +6,8 @@ import { EventLog, summarize } from "../core/log.ts";
 import { findProjectRoot } from "../core/project.ts";
 import { followLog, type HarnessState, report } from "./state.ts";
 
-export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: Clock): void {
+/** `onEvent` sees each record as it is written, after the budget tracker: the runner's live feed. */
+export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: Clock, onEvent?: (record: Record<string, unknown>) => void): void {
 	/** Arguments of tool calls that have started but not ended, by tool call id. */
 	const pending = new Map<string, unknown>();
 
@@ -25,7 +26,10 @@ export function registerLogging(pi: ExtensionAPI, state: HarnessState, clock?: C
 			clock,
 			context: () => ({ session: state.session, mode: state.mode, step: state.step }),
 			onFirstError: (e) => report(state, `cannot write the event log ${path}: ${e.message}. Work continues without it.`),
-			onWrite: (record) => followLog(state, record),
+			onWrite: (record) => {
+				followLog(state, record);
+				onEvent?.(record);
+			},
 		});
 		state.log.write("session_start", { reason: event.reason });
 	});

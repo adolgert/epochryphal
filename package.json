@@ -10,7 +10,9 @@
     ]
   },
   "bin": {
-    "harness-report": "./src/bin/harness-report.ts"
+    "harness-report": "./src/bin/harness-report.ts",
+    "harness-run": "./src/bin/harness-run.ts",
+    "harness-ctl": "./src/bin/harness-ctl.ts"
   },
   "engines": {
     "node": ">=22.18"

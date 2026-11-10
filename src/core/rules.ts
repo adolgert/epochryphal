@@ -3,8 +3,8 @@ import { agentMs, type Tracker } from "./budget.ts";
 import type { Budget } from "./config.ts";
 
 /**
- * Every rule name. check_error, max_iterations, and plan_changed_externally are for headless runs
- * (Step 11); trippedRules does not decide them.
+ * Every rule name. check_error, max_iterations, plan_changed_externally, and aborted_by_user
+ * (harness-ctl stop) are for headless runs; trippedRules does not decide them.
  */
 export type RuleName =
 	| "budget_tokens"
@@ -14,7 +14,11 @@ export type RuleName =
 	| "stall"
 	| "check_error"
 	| "max_iterations"
-	| "plan_changed_externally";
+	| "plan_changed_externally"
+	| "aborted_by_user";
+
+/** The rules only a headless run trips. They always stop: with nobody present, a warning helps no one. */
+export type HeadlessRule = "check_error" | "max_iterations" | "plan_changed_externally" | "aborted_by_user";
 
 export interface Trip {
 	rule: RuleName;

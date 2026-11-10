@@ -1,5 +1,5 @@
 // Running a step's check (plan Section 7.3): first the protected-file check, then the kind's check
-// script under the script contract. The submit tool calls this; the headless runner will too.
+// script under the script contract. The submit tool and the headless runner both call this.
 import { join } from "node:path";
 import type { Clock } from "./clock.ts";
 import type { HarnessConfig } from "./config.ts";
@@ -28,8 +28,8 @@ export interface CheckRequest {
  */
 export type CheckResult =
 	| { status: "passed"; text: string; summary: string }
-	| { status: "failed"; text: string; signature: string | null }
-	| { status: "error"; text: string }
+	| { status: "failed"; text: string; signature: string | null; summary: string }
+	| { status: "error"; text: string; problem: string }
 	| { status: "aborted"; text: string };
 
 const brokenText = (problem: string) =>
@@ -50,7 +50,7 @@ export async function runCheck(req: CheckRequest): Promise<CheckResult> {
 	};
 	const error = (problem: string): CheckResult => {
 		logCheck({ outcome: "script_error", ok: null, signature: null, summary: problem });
-		return { status: "error", text: brokenText(problem) };
+		return { status: "error", text: brokenText(problem), problem };
 	};
 
 	const kind = req.config.kinds[req.step.kind];
@@ -70,6 +70,7 @@ export async function runCheck(req: CheckRequest): Promise<CheckResult> {
 		return {
 			status: "failed",
 			signature: "protected_changed",
+			summary,
 			text: `The check did not pass: ${summary}.\nRestore them to commit ${req.baseCommit.slice(0, 12)} (git checkout ${req.baseCommit.slice(0, 12)} -- <path>; delete new files), then call submit again. Files matching ${req.config.protected.join(", ")} must not change.`,
 		};
 	}
@@ -94,5 +95,5 @@ export async function runCheck(req: CheckRequest): Promise<CheckResult> {
 	}
 	logCheck({ outcome: "result", ok: outcome.ok, signature: outcome.signature, summary: outcome.summary });
 	if (outcome.ok) return { status: "passed", summary: outcome.summary, text: `The check passed: ${outcome.text}` };
-	return { status: "failed", signature: outcome.signature, text: `The check did not pass:\n${outcome.text}\nKeep working, then call submit again.` };
+	return { status: "failed", signature: outcome.signature, summary: outcome.text, text: `The check did not pass:\n${outcome.text}\nKeep working, then call submit again.` };
 }

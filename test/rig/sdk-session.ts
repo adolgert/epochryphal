@@ -83,7 +83,7 @@ const textOf = (content: readonly { type: string; text?: string }[]) =>
 	content.map((c) => (c.type === "text" ? (c.text ?? "") : "")).join("");
 
 /** Replace process.env with a copy that has no provider credentials. */
-function scrubProcessEnv(): void {
+export function scrubProcessEnv(): void {
 	const clean = scrubbedEnv();
 	for (const key of Object.keys(process.env)) if (!(key in clean)) delete process.env[key];
 }
