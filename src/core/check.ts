@@ -59,7 +59,7 @@ export async function runCheck(req: CheckRequest): Promise<CheckResult> {
 
 	let changed: string[];
 	try {
-		changed = changedProtected(req.root, req.baseCommit, req.config.protected);
+		changed = changedProtected(req.root, req.baseCommit, req.config.protected, req.harnessDir);
 	} catch (e) {
 		return error(`the protected-file check could not run: ${(e as Error).message}`);
 	}

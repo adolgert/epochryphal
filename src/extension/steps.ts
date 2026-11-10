@@ -74,7 +74,8 @@ export function registerHarnessCommand(pi: ExtensionAPI, state: HarnessState, na
 	});
 }
 
-export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Clock = systemClock): StepsApi {
+/** `onPassed` runs when a step attempt ends as passed, after its step_end is logged (lesson drafts). */
+export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Clock = systemClock, onPassed?: (step: ActiveStep) => void): StepsApi {
 	const now = () => new Date(clock.now());
 
 	/** The store, or a refusal that explains why the harness is inactive. */
@@ -155,6 +156,8 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 			return;
 		}
 		state.log?.write("step_end", { outcome, detail });
+		const ending = state.step;
+		if (outcome === "passed" && ending && ending.plan === planId && ending.step === stepId && ending.attempt === attempt) onPassed?.(ending);
 		syncActive(null);
 		if (attempt === undefined || !state.log) return;
 		// The record is built from the event log, so it also covers work done before a restart.
@@ -220,7 +223,7 @@ export function registerSteps(pi: ExtensionAPI, state: HarnessState, clock: Cloc
 			throw new CommandError(`step ${step.id} has kind "${step.kind}", which harness.json no longer defines (kinds: ${Object.keys(cfg.kinds).join(", ")}); add the kind back or change the step in the plan file`);
 		}
 		const commit = currentCommit(state.root!);
-		const dirty = changedProtected(state.root!, commit, cfg.protected);
+		const dirty = changedProtected(state.root!, commit, cfg.protected, state.harnessDir);
 		if (dirty.length > 0) throw new CommandError(`protected files have uncommitted changes: ${dirty.join(", ")}; commit or restore them before starting a step`);
 		const prompt = stepPrompt(plan, step, cfg.protected);
 		store().write(plan);

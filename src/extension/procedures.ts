@@ -30,12 +30,22 @@ export function procedureSchema(params: Record<string, ParamSpec>) {
 	return Type.Object(properties);
 }
 
-export function registerProcedures(pi: ExtensionAPI, state: HarnessState, clock?: Clock): void {
+export interface ProceduresApi {
+	/**
+	 * The procedure whose call `toolCallId` returned a failed result (ok false, not a script error or
+	 * a refusal), or null. Each call is reported once: lessons.ts asks at tool_result.
+	 */
+	takeFailed(toolCallId: string): ProcedureConfig | null;
+}
+
+export function registerProcedures(pi: ExtensionAPI, state: HarnessState, clock?: Clock): ProceduresApi {
 	/** Every tool name this extension has registered as a procedure, in this or an earlier project. */
 	const registered = new Set<string>();
 	/** Procedures of the current project that are registered as tools. */
 	let procs = new Map<string, ProcedureConfig>();
 	let config: HarnessConfig | null = null;
+	/** Calls that returned a failed result and whose tool_result has not fired yet. */
+	const failed = new Map<string, ProcedureConfig>();
 
 	// The requires tracker of the current step attempt ("" when no step is active). When the
 	// attempt changes, including after a restart, it is rebuilt from that attempt's events.
@@ -63,7 +73,7 @@ export function registerProcedures(pi: ExtensionAPI, state: HarnessState, clock?
 			parameters: procedureSchema(paramSpecs),
 			// Procedures share the requires state, so calls in one batch run in order.
 			executionMode: "sequential",
-			async execute(_id, params, signal, _onUpdate, ctx) {
+			async execute(toolCallId, params, signal, _onUpdate, ctx) {
 				state.ctx = ctx;
 				// Looked up at call time: a later session_start may have changed or removed it.
 				const proc = procs.get(name);
@@ -110,6 +120,7 @@ export function registerProcedures(pi: ExtensionAPI, state: HarnessState, clock?
 				if (outcome.kind === "script_error") {
 					return reply(`${outcome.text}\nThe script itself is broken; this is not a failed result. If it stays broken, call report_blocked with this message.`, true);
 				}
+				if (result && !result.ok) failed.set(toolCallId, proc);
 				return reply(outcome.text, result?.ok !== true);
 			},
 		});
@@ -159,4 +170,12 @@ export function registerProcedures(pi: ExtensionAPI, state: HarnessState, clock?
 			pi.setActiveTools([...new Set([...active, ...procs.keys()])]);
 		}
 	});
+
+	return {
+		takeFailed(toolCallId) {
+			const proc = failed.get(toolCallId) ?? null;
+			failed.delete(toolCallId);
+			return proc;
+		},
+	};
 }

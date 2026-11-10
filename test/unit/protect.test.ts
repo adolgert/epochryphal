@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { changedProtected, currentCommit, GitError, globToRegExp, guardReason, projectPath } from "../../src/core/protect.ts";
+import { changedProtected, currentCommit, GitError, globToRegExp, guardReason, projectPath, treeFingerprint } from "../../src/core/protect.ts";
 import { makeToyProject, type ToyProject } from "../rig/toy-project.ts";
 
 let toy: ToyProject | undefined;
@@ -58,6 +58,14 @@ describe("guard decision", () => {
 		expect(guardReason("harness/notes.md", PATTERNS, "harness")).toBeNull();
 	});
 
+	it("lets the agent's edit tools write lesson drafts, but not approved lessons", () => {
+		const patterns = [...PATTERNS, "harness/lessons/**"];
+		expect(guardReason("harness/lessons/drafts/e1-s1-a1-build-1.md", patterns, "harness")).toBeNull();
+		expect(guardReason("harness/lessons/nvfortran.md", patterns, "harness")).toMatch(/protected pattern harness\/lessons\/\*\*/);
+		expect(guardReason("harness/lessons/drafts", patterns, "harness")).toMatch(/protected pattern/);
+		expect(guardReason("h2/lessons/drafts/x.md", ["h2/**"], "h2")).toBeNull();
+	});
+
 	it("resolves a tool's path against the working directory, strips a leading @, and ignores paths outside the root", () => {
 		expect(projectPath("/p", "/p", "tests/a.txt")).toBe("tests/a.txt");
 		expect(projectPath("/p", "/p/src", "../tests/a.txt")).toBe("tests/a.txt");
@@ -74,7 +82,7 @@ describe("protected-file check with git", () => {
 		toy = makeToyProject();
 		const base = currentCommit(toy.dir);
 		writeFileSync(join(toy.dir, "tests/test_solver.txt"), "expect nothing\n");
-		expect(changedProtected(toy.dir, base, PATTERNS)).toEqual(["tests/test_solver.txt"]);
+		expect(changedProtected(toy.dir, base, PATTERNS, "harness")).toEqual(["tests/test_solver.txt"]);
 	});
 
 	it("reports a new untracked file, but not an ignored one", () => {
@@ -84,7 +92,7 @@ describe("protected-file check with git", () => {
 		writeFileSync(join(toy.dir, "tests/new/test_extra.txt"), "x\n");
 		writeFileSync(join(toy.dir, ".gitignore"), "harness/log/\ntests/*.tmp\n");
 		writeFileSync(join(toy.dir, "tests/scratch.tmp"), "x\n");
-		expect(changedProtected(toy.dir, base, PATTERNS)).toEqual(["tests/new/test_extra.txt"]);
+		expect(changedProtected(toy.dir, base, PATTERNS, "harness")).toEqual(["tests/new/test_extra.txt"]);
 	});
 
 	it("reports a file changed and then committed", () => {
@@ -92,8 +100,8 @@ describe("protected-file check with git", () => {
 		const base = currentCommit(toy.dir);
 		writeFileSync(join(toy.dir, "tests/test_solver.txt"), "expect nothing\n");
 		commit(toy, "weaken the test");
-		expect(changedProtected(toy.dir, base, PATTERNS)).toEqual(["tests/test_solver.txt"]);
-		expect(changedProtected(toy.dir, currentCommit(toy.dir), PATTERNS)).toEqual([]);
+		expect(changedProtected(toy.dir, base, PATTERNS, "harness")).toEqual(["tests/test_solver.txt"]);
+		expect(changedProtected(toy.dir, currentCommit(toy.dir), PATTERNS, "harness")).toEqual([]);
 	});
 
 	it("reports a deleted file and a file moved out of a protected directory", () => {
@@ -101,7 +109,7 @@ describe("protected-file check with git", () => {
 		const base = currentCommit(toy.dir);
 		toy.git("mv", "tests/test_solver.txt", "src/moved.txt");
 		rmSync(join(toy.dir, "harness/harness.json"));
-		expect(changedProtected(toy.dir, base, PATTERNS)).toEqual(["harness/harness.json", "tests/test_solver.txt"]);
+		expect(changedProtected(toy.dir, base, PATTERNS, "harness")).toEqual(["harness/harness.json", "tests/test_solver.txt"]);
 	});
 
 	it("reports nothing for a changed unprotected file", () => {
@@ -111,7 +119,7 @@ describe("protected-file check with git", () => {
 		writeFileSync(join(toy.dir, "src/new.txt"), "new\n");
 		commit(toy, "work");
 		writeFileSync(join(toy.dir, "src/driver.txt"), "changed\n");
-		expect(changedProtected(toy.dir, base, PATTERNS)).toEqual([]);
+		expect(changedProtected(toy.dir, base, PATTERNS, "harness")).toEqual([]);
 	});
 
 	it("gives paths relative to a project root below the top of the repository", () => {
@@ -123,7 +131,33 @@ describe("protected-file check with git", () => {
 		const base = currentCommit(sub);
 		writeFileSync(join(sub, "tests/t.txt"), "y\n");
 		writeFileSync(join(toy.dir, "tests/test_solver.txt"), "outside the root\n");
-		expect(changedProtected(sub, base, ["tests/**"])).toEqual(["tests/t.txt"]);
+		expect(changedProtected(sub, base, ["tests/**"], "harness")).toEqual(["tests/t.txt"]);
+	});
+
+	it("leaves out lesson drafts, untracked, committed, or changed, but not an approved lesson", () => {
+		toy = makeToyProject();
+		const patterns = [...PATTERNS, "harness/lessons/**"];
+		const base = currentCommit(toy.dir);
+		mkdirSync(join(toy.dir, "harness/lessons/drafts"), { recursive: true });
+		writeFileSync(join(toy.dir, "harness/lessons/drafts/d1.md"), "draft\n");
+		expect(changedProtected(toy.dir, base, patterns, "harness")).toEqual([]);
+		commit(toy, "keep the draft");
+		writeFileSync(join(toy.dir, "harness/lessons/drafts/d1.md"), "draft, edited\n");
+		expect(changedProtected(toy.dir, base, patterns, "harness")).toEqual([]);
+		// Moved into lessons/: the approved lesson counts until it is committed.
+		toy.git("mv", "harness/lessons/drafts/d1.md", "harness/lessons/l1.md");
+		expect(changedProtected(toy.dir, currentCommit(toy.dir), patterns, "harness")).toEqual(["harness/lessons/l1.md"]);
+	});
+
+	it("leaves lesson drafts out of the working-tree fingerprint", () => {
+		toy = makeToyProject();
+		const base = currentCommit(toy.dir);
+		const first = treeFingerprint(toy.dir, base, "harness");
+		mkdirSync(join(toy.dir, "harness/lessons/drafts"), { recursive: true });
+		writeFileSync(join(toy.dir, "harness/lessons/drafts/d1.md"), "draft\n");
+		expect(treeFingerprint(toy.dir, base, "harness")).toBe(first);
+		writeFileSync(join(toy.dir, "harness/lessons/l1.md"), "lesson\n");
+		expect(treeFingerprint(toy.dir, base, "harness")).not.toBe(first);
 	});
 
 	it("refuses with a GitError outside a git repository, and in a repository with no commit", () => {
@@ -131,7 +165,7 @@ describe("protected-file check with git", () => {
 		try {
 			expect(() => currentCommit(dir)).toThrow(GitError);
 			expect(() => currentCommit(dir)).toThrow(/needs the project to be a git repository with at least one commit/);
-			expect(() => changedProtected(dir, "HEAD", PATTERNS)).toThrow(GitError);
+			expect(() => changedProtected(dir, "HEAD", PATTERNS, "harness")).toThrow(GitError);
 			toy = makeToyProject();
 			rmSync(join(toy.dir, ".git"), { recursive: true });
 			toy.git("init", "-q");
@@ -154,6 +188,6 @@ describe("protected-file check with git", () => {
 
 	it("refuses with a GitError when the base commit does not exist", () => {
 		toy = makeToyProject();
-		expect(() => changedProtected(toy!.dir, "0123456789abcdef0123456789abcdef01234567", PATTERNS)).toThrow(GitError);
+		expect(() => changedProtected(toy!.dir, "0123456789abcdef0123456789abcdef01234567", PATTERNS, "harness")).toThrow(GitError);
 	});
 });

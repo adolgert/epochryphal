@@ -122,6 +122,16 @@ describe("harness-run in-process", () => {
 		expect(r.out).toContainEqual(expect.stringMatching(/ s1 check by runner: passed - check ok \| 110 tokens/));
 	});
 
+	it("a step the runner's check passes writes a lesson draft for a build that failed and then succeeded", async () => {
+		const r = await run([{ tool: "build", args: { variant: "gpu" } }, { tool: "build", args: { variant: "gpu" } }, { text: "Done, I think." }], {
+			behavior: { build: [{ ok: false, summary: "E42 broke", signature: "E42" }, { ok: true, summary: "built" }] },
+		});
+		expect(r.code).toBe(0);
+		expect(ofType("check").map((e) => [e.by, e.ok])).toEqual([["runner", true]]);
+		expect(ofType("lesson_drafted")).toEqual([expect.objectContaining({ step: "s1", mode: "headless", path: "harness/lessons/drafts/e1-s1-a1-build-1.md" })]);
+		expect(readFileSync(join(toy!.dir, "harness/lessons/drafts/e1-s1-a1-build-1.md"), "utf8")).toContain('signature: "E42"');
+	});
+
 	it("the agent stops without submit and the check fails: the next request carries the exact feedback prompt", async () => {
 		const behavior = { check: [{ ok: false, summary: "2 tests failed", signature: "T1,T2" }, { ok: true, summary: "all pass" }] };
 		const r = await run([{ text: "Done." }, { text: "Fixed." }], { behavior });

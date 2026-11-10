@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { draftsDir } from "./lessons.ts";
 
 /** Git is missing, the project is not a repository, or a git command failed. */
 export class GitError extends Error {
@@ -40,10 +41,18 @@ export function projectPath(root: string, cwd: string, path: string): string | n
 	return rel.split(sep).join("/");
 }
 
-/** Why the agent's edit tools may not write `path` (relative to the root), or null when they may. */
+/** Whether `path` (relative to the root) lies under the lesson drafts directory. */
+const isDraft = (path: string, harnessDir: string) => path.startsWith(`${draftsDir(harnessDir)}/`);
+
+/**
+ * Why the agent's edit tools may not write `path` (relative to the root), or null when they may.
+ * Lesson drafts are allowed, so the agent can fill one in when a person asks; a draft has no
+ * effect until a person moves it into the protected lessons directory.
+ */
 export function guardReason(path: string, patterns: readonly string[], harnessDir: string): string | null {
 	if (path.startsWith(`${harnessDir}/plans/`)) return "plan files change only through harness commands and tools";
 	if (path.startsWith(`${harnessDir}/log/`)) return "the harness log is written only by the harness";
+	if (isDraft(path, harnessDir)) return null;
 	const pattern = patterns.find((p) => globToRegExp(p).test(path));
 	return pattern === undefined ? null : `it matches the protected pattern ${pattern}`;
 }
@@ -72,25 +81,26 @@ export function currentCommit(root: string): string {
 /**
  * Protected files that differ from commit `base` (committed or not), or are untracked and not
  * ignored. Paths are relative to `root`, sorted. With `base` = HEAD this is "uncommitted changes".
+ * Lesson drafts never count: the harness writes them itself when a step passes.
  */
-export function changedProtected(root: string, base: string, patterns: readonly string[]): string[] {
+export function changedProtected(root: string, base: string, patterns: readonly string[], harnessDir: string): string[] {
 	// --no-renames: a file moved out of a protected directory must show under its old name too.
 	const changed = nulList(git(root, ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--relative", "-z", base, "--"]));
 	const untracked = nulList(git(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
-	return [...new Set([...changed, ...untracked])].filter((p) => matchesAny(p, patterns)).sort();
+	return [...new Set([...changed, ...untracked])].filter((p) => !isDraft(p, harnessDir) && matchesAny(p, patterns)).sort();
 }
 
 /**
  * A hash of the working tree's content under `root`, for the stall rule: equal hashes mean the
  * same files hold the same bytes. It covers every file that differs from commit `base` (committed
  * since or not, with its mode, or as deleted) and every untracked file that git does not ignore.
- * The harness's own plans/ and log/ are left out, because the harness writes there itself.
+ * The harness's own plans/, log/, and lessons/drafts/ are left out, because the harness writes there itself.
  *
  * Cost: one `git diff` and one `git ls-files`, which stat every tracked file and walk untracked
  * directories, then reading each changed or untracked file in full. Nothing is written to git.
  */
 export function treeFingerprint(root: string, base: string, harnessDir: string): string {
-	const pathspec = ["--", ".", `:(exclude)${harnessDir}/plans`, `:(exclude)${harnessDir}/log`];
+	const pathspec = ["--", ".", `:(exclude)${harnessDir}/plans`, `:(exclude)${harnessDir}/log`, `:(exclude)${draftsDir(harnessDir)}`];
 	// --raw -z gives ":oldmode newmode oldsha newsha status\0path\0" per file.
 	const raw = nulList(git(root, ["diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--relative", base, ...pathspec]));
 	const entries: string[] = [];

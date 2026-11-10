@@ -6,6 +6,7 @@ import { registerBudget } from "./budget.ts";
 import { registerCompletion } from "./completion.ts";
 import { headlessHandle, type RunnerHandle } from "./headless.ts";
 import { registerInterruptions } from "./interruptions.ts";
+import { type LessonsApi, registerLessons } from "./lessons.ts";
 import { registerLogging } from "./logging.ts";
 import { registerProcedures } from "./procedures.ts";
 import { registerProposals } from "./proposals.ts";
@@ -38,12 +39,14 @@ function harness(pi: ExtensionAPI, options: HarnessOptions): void {
 	if (options.mode) state.mode = options.mode;
 	// Logging first: its session_start handler finds the project root that the others use.
 	registerLogging(pi, state, options.clock, options.onEvent);
-	const steps = registerSteps(pi, state, options.clock);
+	let lessons: LessonsApi | undefined;
+	const steps = registerSteps(pi, state, options.clock, (step) => lessons?.draft(step));
 	// Before completion: its tool_call handler refuses calls after a stop, ahead of the guard.
 	const budget = registerBudget(pi, state, steps, options.clock);
 	const completion = registerCompletion(pi, state, steps, budget, options.clock);
 	registerInterruptions(pi, state);
-	registerProcedures(pi, state, options.clock);
+	const procedures = registerProcedures(pi, state, options.clock);
+	lessons = registerLessons(pi, state, procedures, options.clock);
 	registerProposals(pi, state, steps);
 	registerRunPlan(pi, state, steps);
 	options.connect?.(headlessHandle(state, steps, budget, completion));
